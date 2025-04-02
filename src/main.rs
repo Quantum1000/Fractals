@@ -113,6 +113,16 @@ impl Color {
         }
     }
 
+    fn a_lerp(&self, other: &Color, t: f32) -> Color {
+        let blend_factor = (1.0 - (1.0 - t) * self.a) * other.a;
+        Color {
+            r: self.r + (other.r - self.r) * blend_factor,
+            g: self.g + (other.g - self.g) * blend_factor,
+            b: self.b + (other.b - self.b) * blend_factor,
+            a: self.a.max(other.a),
+        }
+    }
+
     fn to_rgba(&self) -> Rgba<u8> {
         Rgba([
             (self.r * 255.0) as u8,
@@ -151,6 +161,63 @@ fn create_base_pattern() -> Pattern {
 }
 
 fn generate_fractal(iterations: u32, pattern: &Pattern, decay: f32) -> Vec<Vec<Color>> {
+    let final_size = 1 << iterations;
+    let mut result = vec![vec![Pixel {
+        color: Color::new(0.0, 0.0, 0.0, 0.0),
+        perm: Permutation::identity()
+    }; final_size]; final_size];
+    
+    // Initialize with base pattern
+    let base = pattern.pixels;
+    for y in 0..2 {
+        for x in 0..2 {
+            result[y][x] = base[y][x];
+        }
+    }
+
+    let mut blend = 1.0;
+    let mut current_size = 2;
+    
+    while current_size < final_size {
+        blend *= decay;
+        let new_size = current_size * 2;
+
+        for y in (0..current_size).rev() {
+            for x in (0..current_size).rev() {
+                let pixel = result[y][x];
+                let color = pixel.color;
+                
+                let y_start = y * 2;
+                let x_start = x * 2;
+                
+                // Get base pattern and apply current permutation
+                let base = pattern.pixels;
+                let permuted_base = pixel.perm.apply(base);
+                
+                // Place blended region with composed permutations
+                for dy in 0..2 {
+                    for dx in 0..2 {
+                        let base_pixel = permuted_base[dy][dx];
+                        let new_perm = pixel.perm.compose(&base_pixel.perm);
+                        result[y_start + dy][x_start + dx] = Pixel {
+                            color: color.a_lerp(&base_pixel.color, blend),
+                            perm: new_perm,
+                        };
+                    }
+                }
+            }
+        }
+        
+        current_size = new_size;
+    }
+
+    // Extract final colors
+    result.into_iter()
+        .map(|row| row.into_iter().map(|pixel| pixel.color).collect())
+        .collect()
+}
+
+fn old_generate_fractal(iterations: u32, pattern: &Pattern, decay: f32) -> Vec<Vec<Color>> {
     let final_size = 1 << iterations;
     let mut result = vec![vec![Pixel {
         color: Color::new(0.0, 0.0, 0.0, 0.0),
@@ -423,7 +490,7 @@ impl FractalApp {
     }
 
     fn update_preview(&mut self, ctx: &egui::Context) {
-        let fractal = generate_fractal(self.iterations, &self.pattern, self.decay);
+        let fractal = old_generate_fractal(self.iterations, &self.pattern, self.decay);
         let size = 1 << self.iterations;
         
         let mut image = image::RgbaImage::new(size as u32, size as u32);
