@@ -388,6 +388,9 @@ fn load_pattern_from_file(path: &str) -> Result<Pattern, PatternError> {
 #[derive(PartialEq)]
 enum AppMode { Classic, Spec }
 
+#[derive(PartialEq, Clone)]
+enum SpecStopMode { Threshold, MaxDepth }
+
 struct FractalApp {
     pattern: Pattern,
     preview_texture: Option<egui::TextureHandle>,
@@ -404,6 +407,8 @@ struct FractalApp {
     spec_preview_texture: Option<egui::TextureHandle>,
     spec_threshold: f32,
     spec_output_size: u32,
+    spec_stop_mode: SpecStopMode,
+    spec_max_depth: u32,
 }
 
 impl FractalApp {
@@ -423,6 +428,8 @@ impl FractalApp {
             spec_preview_texture: None,
             spec_threshold: 2.0,
             spec_output_size: 512,
+            spec_stop_mode: SpecStopMode::Threshold,
+            spec_max_depth: 4,
         }
     }
     
@@ -641,7 +648,11 @@ impl FractalApp {
 
     fn update_spec_preview(&mut self, ctx: &egui::Context) {
         if let Some(pattern) = &self.spec_pattern {
-            let pixels = render_spec_pattern(pattern, self.spec_threshold, self.spec_output_size);
+            let stop = match self.spec_stop_mode {
+                SpecStopMode::Threshold => SpecStopCondition::Threshold(self.spec_threshold),
+                SpecStopMode::MaxDepth => SpecStopCondition::MaxDepth(self.spec_max_depth),
+            };
+            let pixels = render_spec_pattern(pattern, &stop, self.spec_output_size);
             let size = self.spec_output_size as usize;
             let raw: Vec<u8> = pixels.iter()
                 .flat_map(|row| row.iter().flat_map(|&[r, g, b, a]| [r, g, b, a]))
@@ -663,7 +674,11 @@ impl FractalApp {
                 .set_title("Export Spec PNG")
                 .save_file()
             {
-                let pixels = render_spec_pattern(pattern, self.spec_threshold, self.spec_output_size);
+                let stop = match self.spec_stop_mode {
+                    SpecStopMode::Threshold => SpecStopCondition::Threshold(self.spec_threshold),
+                    SpecStopMode::MaxDepth => SpecStopCondition::MaxDepth(self.spec_max_depth),
+                };
+                let pixels = render_spec_pattern(pattern, &stop, self.spec_output_size);
                 let size = self.spec_output_size;
                 let mut image = ImageBuffer::new(size, size);
                 for (y, row) in pixels.iter().enumerate() {
@@ -702,7 +717,19 @@ impl eframe::App for FractalApp {
                 if ui.button("Load Spec Pattern").clicked() {
                     self.load_spec_pattern_file(ctx);
                 }
-                ui.add(egui::Slider::new(&mut self.spec_threshold, 0.5..=8.0).text("Threshold"));
+                ui.horizontal(|ui| {
+                    ui.label("Stop by:");
+                    ui.selectable_value(&mut self.spec_stop_mode, SpecStopMode::Threshold, "Threshold");
+                    ui.selectable_value(&mut self.spec_stop_mode, SpecStopMode::MaxDepth, "Max Depth");
+                });
+                match self.spec_stop_mode {
+                    SpecStopMode::Threshold => {
+                        ui.add(egui::Slider::new(&mut self.spec_threshold, 0.5..=8.0).text("Threshold"));
+                    }
+                    SpecStopMode::MaxDepth => {
+                        ui.add(egui::Slider::new(&mut self.spec_max_depth, 1..=16).text("Max Depth"));
+                    }
+                }
                 let sizes = [128u32, 256, 512, 1024];
                 ui.horizontal(|ui| {
                     ui.label("Size:");
@@ -997,6 +1024,11 @@ fn eval_decision_tree<'a>(tree: &'a DecisionTree, ctx: &EvalContext) -> &'a str 
 
 // ========== SECTION 7: Rendering Pipeline ==========
 
+enum SpecStopCondition {
+    Threshold(f32),
+    MaxDepth(u32),
+}
+
 struct TileInstance {
     tile_type: String,
     transform: [[f32; 3]; 2],
@@ -1047,13 +1079,25 @@ fn decompose_transform(t: &[[f32; 3]; 2]) -> EvalContext {
     EvalContext { pos, scale, orientation, shear, stretch, state: vec![], rng: 0.0, depth: 0 }
 }
 
-fn build_child_transform(parent_transform: &[[f32; 3]; 2], child_verts: &[[f32; 2]], n: usize) -> [[f32; 3]; 2] {
+fn build_child_transform(parent_transform: &[[f32; 3]; 2], canonical_verts: &[[f32; 2]], child_verts: &[[f32; 2]]) -> [[f32; 3]; 2] {
+    let n = canonical_verts.len();
+    let c0 = canonical_verts[0];
+    let c1 = canonical_verts[1];
+    let cn = canonical_verts[n - 1];
     let p0 = child_verts[0];
     let p1 = child_verts[1];
     let p_last = child_verts[n - 1];
+    // Solve M*(c1-c0)=p1-p0, M*(cn-c0)=p_last-p0, t=p0-M*c0
+    let v1 = [c1[0] - c0[0], c1[1] - c0[1]];
+    let v2 = [cn[0] - c0[0], cn[1] - c0[1]];
+    let w1 = [p1[0] - p0[0], p1[1] - p0[1]];
+    let w2 = [p_last[0] - p0[0], p_last[1] - p0[1]];
+    let inv = 1.0 / (v1[0] * v2[1] - v1[1] * v2[0]);
+    let col0 = [(v2[1]*w1[0] - v1[1]*w2[0]) * inv, (v2[1]*w1[1] - v1[1]*w2[1]) * inv];
+    let col1 = [(v1[0]*w2[0] - v2[0]*w1[0]) * inv, (v1[0]*w2[1] - v2[0]*w1[1]) * inv];
     let local = [
-        [p1[0] - p0[0], p_last[0] - p0[0], p0[0]],
-        [p1[1] - p0[1], p_last[1] - p0[1], p0[1]],
+        [col0[0], col1[0], p0[0] - col0[0]*c0[0] - col1[0]*c0[1]],
+        [col0[1], col1[1], p0[1] - col0[1]*c0[0] - col1[1]*c0[1]],
     ];
     compose_transforms(parent_transform, &local)
 }
@@ -1083,14 +1127,18 @@ fn point_in_convex_polygon(poly: &[[f32; 2]], px: f32, py: f32) -> bool {
     true
 }
 
-fn expand_tile(tile: &TileInstance, pattern: &SpecPattern, threshold: f32, out: &mut Vec<TerminalTile>) {
+fn expand_tile(tile: &TileInstance, pattern: &SpecPattern, stop: &SpecStopCondition, out: &mut Vec<TerminalTile>) {
     let mut ctx = decompose_transform(&tile.transform);
     ctx.state = tile.state.clone();
     ctx.depth = tile.depth;
     let (_, rng) = lcg_next(tile.rng_seed);
     ctx.rng = rng;
 
-    if ctx.scale < threshold {
+    let should_stop = match stop {
+        SpecStopCondition::Threshold(t) => ctx.scale < *t,
+        SpecStopCondition::MaxDepth(d) => tile.depth >= *d,
+    };
+    if should_stop {
         let canon = &pattern.canonical_vertices[&tile.tile_type];
         let polygon = canon.iter().map(|&v| apply_transform(&tile.transform, v)).collect();
         let color = [
@@ -1114,8 +1162,8 @@ fn expand_tile(tile: &TileInstance, pattern: &SpecPattern, threshold: f32, out: 
 
     for (i, child_spec) in partition.children.iter().enumerate() {
         let child_verts: Vec<[f32; 2]> = child_spec.vertices.iter().map(|&vi| all_verts[vi]).collect();
-        let child_n = pattern.canonical_vertices[&child_spec.tile_type].len();
-        let child_transform = build_child_transform(&tile.transform, &child_verts, child_n);
+        let canon_verts = &pattern.canonical_vertices[&child_spec.tile_type];
+        let child_transform = build_child_transform(&tile.transform, canon_verts, &child_verts);
 
         let new_state: Vec<f32> = child_spec.state_updates.iter()
             .map(|e| eval_expr(e, &ctx))
@@ -1131,11 +1179,11 @@ fn expand_tile(tile: &TileInstance, pattern: &SpecPattern, threshold: f32, out: 
             rng_seed: new_seed,
         };
 
-        expand_tile(&child_tile, pattern, threshold, out);
+        expand_tile(&child_tile, pattern, stop, out);
     }
 }
 
-fn render_spec_pattern(pattern: &SpecPattern, threshold: f32, output_size: u32) -> Vec<Vec<[u8; 4]>> {
+fn render_spec_pattern(pattern: &SpecPattern, stop: &SpecStopCondition, output_size: u32) -> Vec<Vec<[u8; 4]>> {
     let s = output_size as f32;
     let root = TileInstance {
         tile_type: pattern.root_tile_type.clone(),
@@ -1146,7 +1194,7 @@ fn render_spec_pattern(pattern: &SpecPattern, threshold: f32, output_size: u32) 
     };
 
     let mut terminals: Vec<TerminalTile> = Vec::new();
-    expand_tile(&root, pattern, threshold, &mut terminals);
+    expand_tile(&root, pattern, stop, &mut terminals);
 
     let size = output_size as usize;
     let mut pixels = vec![vec![[0u8, 0u8, 0u8, 255u8]; size]; size];
@@ -1278,7 +1326,7 @@ mod tests {
         };
 
         let mut terminals = Vec::new();
-        expand_tile(&root, &pattern, 0.5, &mut terminals);
+        expand_tile(&root, &pattern, &SpecStopCondition::Threshold(0.5), &mut terminals);
 
         // With threshold=0.5 and scale=4, we expand twice: root→4 children (scale=2), each→4 grandchildren (scale=1, <2 but >0.5 — actually 1>0.5 so expand again)
         // Let me use threshold=2.0 to stop after first expansion
@@ -1290,7 +1338,7 @@ mod tests {
             depth: 0,
             rng_seed: 0,
         };
-        expand_tile(&root2, &pattern, 2.1, &mut terminals2);
+        expand_tile(&root2, &pattern, &SpecStopCondition::Threshold(2.1), &mut terminals2);
 
         println!("Terminal count (threshold 2.1 on scale-4 root): {}", terminals2.len());
         for (i, t) in terminals2.iter().enumerate() {
@@ -1317,8 +1365,9 @@ mod tests {
     fn test_child_transform_identity() {
         // Identity child: vertices [TL, TR, BR, BL] = [(0,0),(0.5,0),(0.5,0.5),(0,0.5)]
         let parent = [[4.0f32, 0.0, 0.0], [0.0, 4.0, 0.0]];
+        let canon: [[f32; 2]; 4] = [[0.0,0.0],[1.0,0.0],[1.0,1.0],[0.0,1.0]];
         let verts = [[0.0f32,0.0],[0.5,0.0],[0.5,0.5],[0.0,0.5]];
-        let t = build_child_transform(&parent, &verts, 4);
+        let t = build_child_transform(&parent, &canon, &verts);
         // Canonical (0,0) should map to world (0,0), (1,0) to (2,0), (0,1) to (0,2)
         let p00 = apply_transform(&t, [0.0, 0.0]);
         let p10 = apply_transform(&t, [1.0, 0.0]);
@@ -1333,8 +1382,9 @@ mod tests {
     fn test_child_transform_rotate180() {
         // Rotate180 child vertices [8,7,0,4]: [(0.5,0.5),(0,0.5),(0,0),(0.5,0)]
         let parent = [[4.0f32, 0.0, 0.0], [0.0, 4.0, 0.0]];
+        let canon: [[f32; 2]; 4] = [[0.0,0.0],[1.0,0.0],[1.0,1.0],[0.0,1.0]];
         let verts = [[0.5f32,0.5],[0.0,0.5],[0.0,0.0],[0.5,0.0]];
-        let t = build_child_transform(&parent, &verts, 4);
+        let t = build_child_transform(&parent, &canon, &verts);
         // Canonical (0,0)->world (2,2), (1,0)->world (0,2), (0,1)->world (2,0)
         let p00 = apply_transform(&t, [0.0, 0.0]);
         let p10 = apply_transform(&t, [1.0, 0.0]);
@@ -1365,7 +1415,7 @@ mod tests {
     fn test_rasterization_coverage() {
         // threshold=2.0 → terminal tiles at scale=1.0 → one tile per pixel in 4x4 image
         let pattern = make_quilt_pattern();
-        let pixels = render_spec_pattern(&pattern, 2.0, 4);
+        let pixels = render_spec_pattern(&pattern, &SpecStopCondition::Threshold(2.0), 4);
         println!("4x4 pixel grid:");
         for row in &pixels {
             println!("  {:?}", row);

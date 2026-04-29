@@ -1,0 +1,789 @@
+{
+  "tile_types": {
+    "quad": {
+      "n": 4,
+      "invariants": []
+    },
+    "tri": {
+      "n": 3,
+      "invariants": []
+    }
+  },
+  "canonical_vertices": {
+    "quad": [
+      [
+        0.0,
+        0.0
+      ],
+      [
+        1.0,
+        0.0
+      ],
+      [
+        1.0,
+        1.0
+      ],
+      [
+        0.0,
+        1.0
+      ]
+    ],
+    "tri": [
+      [
+        0.0,
+        0.0
+      ],
+      [
+        1.0,
+        0.0
+      ],
+      [
+        1.0,
+        1.0
+      ]
+    ]
+  },
+  "partitions": {
+    "quad": {
+      "quad_split": {
+        "interior_vertices": [
+          [
+            0.5,
+            0.0
+          ],
+          [
+            1.0,
+            0.5
+          ],
+          [
+            0.5,
+            1.0
+          ],
+          [
+            0.0,
+            0.5
+          ]
+        ],
+        "children": [
+          {
+            "tile_type": "quad",
+            "vertices": [
+              4,
+              5,
+              6,
+              7
+            ],
+            "state_updates": [
+              {
+                "Mix": [
+                  {
+                    "State": 4
+                  },
+                  {
+                    "State": 0
+                  },
+                  {
+                    "Lit": 0
+                  }
+                ]
+              },
+              {
+                "Mix": [
+                  {
+                    "State": 4
+                  },
+                  {
+                    "State": 1
+                  },
+                  {
+                    "Lit": 0
+                  }
+                ]
+              },
+              {
+                "Mix": [
+                  {
+                    "State": 4
+                  },
+                  {
+                    "State": 2
+                  },
+                  {
+                    "Lit": 0
+                  }
+                ]
+              },
+              {
+                "State": 3
+              },
+              {
+                "Mix": [
+                  {
+                    "Lit": 0.1
+                  },
+                  {
+                    "State": 4
+                  },
+                  {
+                    "Mul": [
+                      {
+                        "State": 5
+                      },
+                      {
+                        "State": 6
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "Mul": [
+                  {
+                    "State": 5
+                  },
+                  {
+                    "State": 6
+                  }
+                ]
+              },
+              {
+                "State": 6
+              }
+            ]
+          },
+          {
+            "tile_type": "tri",
+            "vertices": [
+              7, 0, 4
+            ],
+            "state_updates": [
+              {
+                "Mix": [
+                  {
+                    "State": 4
+                  },
+                  {
+                    "State": 0
+                  },
+                  {
+                    "Lit": 0.24742047
+                  }
+                ]
+              },
+              {
+                "Mix": [
+                  {
+                    "State": 4
+                  },
+                  {
+                    "State": 1
+                  },
+                  {
+                    "Lit": 0.24742047
+                  }
+                ]
+              },
+              {
+                "Mix": [
+                  {
+                    "State": 4
+                  },
+                  {
+                    "State": 2
+                  },
+                  {
+                    "Lit": 0.24742047
+                  }
+                ]
+              },
+              {
+                "State": 3
+              },
+              {
+                "Mix": [
+                  {
+                    "Lit": 1.0
+                  },
+                  {
+                    "State": 4
+                  },
+                  {
+                    "Mul": [
+                      {
+                        "State": 5
+                      },
+                      {
+                        "State": 6
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "Mul": [
+                  {
+                    "State": 5
+                  },
+                  {
+                    "State": 6
+                  }
+                ]
+              },
+              {
+                "State": 6
+              }
+            ]
+          },
+          {
+            "tile_type": "tri",
+            "vertices": [
+              4, 1, 5
+            ],
+            "state_updates": [
+              {
+                "Mix": [
+                  {
+                    "State": 4
+                  },
+                  {
+                    "State": 0
+                  },
+                  {
+                    "Lit": 0.0
+                  }
+                ]
+              },
+              {
+                "Mix": [
+                  {
+                    "State": 4
+                  },
+                  {
+                    "State": 1
+                  },
+                  {
+                    "Lit": 0.0
+                  }
+                ]
+              },
+              {
+                "Mix": [
+                  {
+                    "State": 4
+                  },
+                  {
+                    "State": 2
+                  },
+                  {
+                    "Lit": 0.1
+                  }
+                ]
+              },
+              {
+                "State": 3
+              },
+              {
+                "Mix": [
+                  {
+                    "Lit": 1.0
+                  },
+                  {
+                    "State": 4
+                  },
+                  {
+                    "Mul": [
+                      {
+                        "State": 5
+                      },
+                      {
+                        "State": 6
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "Mul": [
+                  {
+                    "State": 5
+                  },
+                  {
+                    "State": 6
+                  }
+                ]
+              },
+              {
+                "State": 6
+              }
+            ]
+          },
+          {
+            "tile_type": "tri",
+            "vertices": [
+              5, 2, 6
+            ],
+            "state_updates": [
+              {
+                "Mix": [
+                  {
+                    "State": 4
+                  },
+                  {
+                    "State": 0
+                  },
+                  {
+                    "Lit": 0.1
+                  }
+                ]
+              },
+              {
+                "Mix": [
+                  {
+                    "State": 4
+                  },
+                  {
+                    "State": 1
+                  },
+                  {
+                    "Lit": 0.1
+                  }
+                ]
+              },
+              {
+                "Mix": [
+                  {
+                    "State": 4
+                  },
+                  {
+                    "State": 2
+                  },
+                  {
+                    "Lit": 0.0
+                  }
+                ]
+              },
+              {
+                "State": 3
+              },
+              {
+                "Mix": [
+                  {
+                    "Lit": 0.5
+                  },
+                  {
+                    "State": 4
+                  },
+                  {
+                    "Mul": [
+                      {
+                        "State": 5
+                      },
+                      {
+                        "State": 6
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "Mul": [
+                  {
+                    "State": 5
+                  },
+                  {
+                    "State": 6
+                  }
+                ]
+              },
+              {
+                "State": 6
+              }
+            ]
+          },
+          {
+            "tile_type": "tri",
+            "vertices": [
+              6, 3, 7
+            ],
+            "state_updates": [
+              {
+                "Mix": [
+                  {
+                    "State": 4
+                  },
+                  {
+                    "State": 0
+                  },
+                  {
+                    "Lit": 0.2
+                  }
+                ]
+              },
+              {
+                "Mix": [
+                  {
+                    "State": 4
+                  },
+                  {
+                    "State": 1
+                  },
+                  {
+                    "Lit": 0.2
+                  }
+                ]
+              },
+              {
+                "Mix": [
+                  {
+                    "State": 4
+                  },
+                  {
+                    "State": 2
+                  },
+                  {
+                    "Lit": 0.0
+                  }
+                ]
+              },
+              {
+                "State": 3
+              },
+              {
+                "Mix": [
+                  {
+                    "Lit": 0.0
+                  },
+                  {
+                    "State": 4
+                  },
+                  {
+                    "Mul": [
+                      {
+                        "State": 5
+                      },
+                      {
+                        "State": 6
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "Mul": [
+                  {
+                    "State": 5
+                  },
+                  {
+                    "State": 6
+                  }
+                ]
+              },
+              {
+                "State": 6
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "tri": {
+      "tri_split": {
+        "interior_vertices": [
+          [
+            0.5,
+            0.5
+          ],
+          [0.5, 0],
+          [1, 0.5]
+        ],
+        "children": [
+          {
+            "tile_type": "quad",
+            "vertices": [
+              4,
+              1,
+              5,
+              3
+            ],
+            "state_updates": [
+              {
+                "Mix": [
+                  {
+                    "State": 4
+                  },
+                  {
+                    "State": 0
+                  },
+                  {
+                    "Lit": 0
+                  }
+                ]
+              },
+              {
+                "Mix": [
+                  {
+                    "State": 4
+                  },
+                  {
+                    "State": 1
+                  },
+                  {
+                    "Lit": 0
+                  }
+                ]
+              },
+              {
+                "Mix": [
+                  {
+                    "State": 4
+                  },
+                  {
+                    "State": 2
+                  },
+                  {
+                    "Lit": 0
+                  }
+                ]
+              },
+              {
+                "State": 3
+              },
+              {
+                "Mix": [
+                  {
+                    "Lit": 0.1
+                  },
+                  {
+                    "State": 4
+                  },
+                  {
+                    "Mul": [
+                      {
+                        "State": 5
+                      },
+                      {
+                        "State": 6
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "Mul": [
+                  {
+                    "State": 5
+                  },
+                  {
+                    "State": 6
+                  }
+                ]
+              },
+              {
+                "State": 6
+              }
+            ]
+          },
+          {
+            "tile_type": "tri",
+            "vertices": [
+              0, 4, 3
+            ],
+            "state_updates": [
+              {
+                "Mix": [
+                  {
+                    "State": 4
+                  },
+                  {
+                    "State": 0
+                  },
+                  {
+                    "Lit": 0.5
+                  }
+                ]
+              },
+              {
+                "Mix": [
+                  {
+                    "State": 4
+                  },
+                  {
+                    "State": 1
+                  },
+                  {
+                    "Lit": 0.5
+                  }
+                ]
+              },
+              {
+                "Mix": [
+                  {
+                    "State": 4
+                  },
+                  {
+                    "State": 2
+                  },
+                  {
+                    "Lit": 0.6
+                  }
+                ]
+              },
+              {
+                "State": 3
+              },
+              {
+                "Mix": [
+                  {
+                    "Lit": 1.0
+                  },
+                  {
+                    "State": 4
+                  },
+                  {
+                    "Mul": [
+                      {
+                        "State": 5
+                      },
+                      {
+                        "State": 6
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "Mul": [
+                  {
+                    "State": 5
+                  },
+                  {
+                    "State": 6
+                  }
+                ]
+              },
+              {
+                "State": 6
+              }
+            ]
+          },
+          {
+            "tile_type": "tri",
+            "vertices": [
+              3, 5, 2
+            ],
+            "state_updates": [
+              {
+                "Mix": [
+                  {
+                    "State": 4
+                  },
+                  {
+                    "State": 0
+                  },
+                  {
+                    "Lit": 0.3
+                  }
+                ]
+              },
+              {
+                "Mix": [
+                  {
+                    "State": 4
+                  },
+                  {
+                    "State": 1
+                  },
+                  {
+                    "Lit": 0.2
+                  }
+                ]
+              },
+              {
+                "Mix": [
+                  {
+                    "State": 4
+                  },
+                  {
+                    "State": 2
+                  },
+                  {
+                    "Lit": 0.0
+                  }
+                ]
+              },
+              {
+                "State": 3
+              },
+              {
+                "Mix": [
+                  {
+                    "Lit": 1.0
+                  },
+                  {
+                    "State": 4
+                  },
+                  {
+                    "Mul": [
+                      {
+                        "State": 5
+                      },
+                      {
+                        "State": 6
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "Mul": [
+                  {
+                    "State": 5
+                  },
+                  {
+                    "State": 6
+                  }
+                ]
+              },
+              {
+                "State": 6
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "rules": {
+    "quad": {
+      "Leaf": "quad_split"
+    },
+
+    "tri": {
+      "Leaf": "tri_split"
+    }
+  },
+  "initial_state": [
+    0.0,
+    0.0,
+    0.0,
+    1.0,
+    1.0,
+    1.0,
+    0.6
+  ],
+  "root_tile_type": "quad",
+  "color_expr": [
+    {
+      "State": 0
+    },
+    {
+      "State": 1
+    },
+    {
+      "State": 2
+    },
+    {
+      "Lit": 1.0
+    }
+  ]
+}
