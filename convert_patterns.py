@@ -71,12 +71,13 @@ def make_state_updates(r, g, b, a):
     mix_weight decays by 'decay' each level (default 0.5).
     """
     return [
-        {"Mix": [{"State": 3}, {"State": 0}, {"Lit": r}]},
-        {"Mix": [{"State": 3}, {"State": 1}, {"Lit": g}]},
-        {"Mix": [{"State": 3}, {"State": 2}, {"Lit": b}]},
-        {"Mix": [{"Lit": a}, {"State": 3},{"Mul": [{"State": 4}, {"State": 5}]}]},
-        {"Mul": [{"State": 4}, {"State": 5}]},
-        {"State": 5},
+        {"Mix": [{"State": 4}, {"State": 0}, {"Lit": r}]},
+        {"Mix": [{"State": 4}, {"State": 1}, {"Lit": g}]},
+        {"Mix": [{"State": 4}, {"State": 2}, {"Lit": b}]},
+        {"State": 3},
+        {"Mix": [{"Lit": a}, {"State": 4},{"Mul": [{"State": 5}, {"State": 6}]}]},
+        {"Mul": [{"State": 5}, {"State": 6}]},
+        {"State": 6},
     ]
 
 
@@ -117,7 +118,7 @@ def convert_pattern(old_pattern):
         "rules": {
             "quad": {"Leaf": "quad_split"}
         },
-        "initial_state": [0.0, 0.0, 0.0, 1.0, 1.0, 0.5],
+        "initial_state": [0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.5],
         "root_tile_type": "quad",
         "color_expr": [
             {"State": 0},
