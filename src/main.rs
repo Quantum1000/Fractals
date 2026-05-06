@@ -2,9 +2,12 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use image::{ImageBuffer, Rgba};
-use eframe::egui::{self, Vec2};
+use eframe::egui;
 use serde::{Deserialize, Serialize};
 use std::fs;
+
+use frac_lang::normalizer::{self, NormalizedFile, NormalizeError};
+use frac_lang::evaluator::{self, EvalConfig, RenderTree};
 
 // Add Serialize/Deserialize to our existing structs
 #[derive(Copy, Clone, Debug, Serialize, Deserialize)]
@@ -386,7 +389,7 @@ fn load_pattern_from_file(path: &str) -> Result<Pattern, PatternError> {
 }
 
 #[derive(PartialEq)]
-enum AppMode { Classic, Spec }
+enum AppMode { Classic, Spec, Frac }
 
 #[derive(PartialEq, Clone)]
 enum SpecStopMode { Threshold, MaxDepth }
@@ -409,6 +412,12 @@ struct FractalApp {
     spec_output_size: u32,
     spec_stop_mode: SpecStopMode,
     spec_max_depth: u32,
+    // Frac mode
+    frac_normalized: Option<NormalizedFile>,
+    frac_errors: Vec<NormalizeError>,
+    frac_preview_texture: Option<egui::TextureHandle>,
+    frac_max_depth: u32,
+    frac_output_size: u32,
 }
 
 impl FractalApp {
@@ -430,6 +439,11 @@ impl FractalApp {
             spec_output_size: 512,
             spec_stop_mode: SpecStopMode::Threshold,
             spec_max_depth: 4,
+            frac_normalized: None,
+            frac_errors: Vec::new(),
+            frac_preview_texture: None,
+            frac_max_depth: 6,
+            frac_output_size: 512,
         }
     }
     
@@ -693,6 +707,109 @@ impl FractalApp {
             }
         }
     }
+
+    fn load_frac_file(&mut self, ctx: &egui::Context) {
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("Frac", &["frac"])
+            .set_title("Load .frac File")
+            .pick_file()
+        {
+            match fs::read_to_string(&path) {
+                Err(e) => {
+                    self.update_status(ctx, &format!("Failed to read file: {e}"), true);
+                }
+                Ok(src) => {
+                    let (file, parse_errs) = frac_lang::parser::parse(&src);
+                    if !parse_errs.is_empty() {
+                        self.frac_errors = parse_errs.into_iter()
+                            .map(|e| NormalizeError::ParseErrors(vec![e]))
+                            .collect();
+                        self.frac_normalized = None;
+                        self.update_status(ctx, "Parse errors — see error panel", true);
+                        return;
+                    }
+                    match normalizer::normalize(file) {
+                        Ok(nf) => {
+                            self.frac_errors.clear();
+                            self.frac_normalized = Some(nf);
+                            self.update_status(ctx, ".frac file loaded and normalized", false);
+                            self.update_frac_preview(ctx);
+                        }
+                        Err(errs) => {
+                            self.frac_errors = errs;
+                            self.frac_normalized = None;
+                            self.update_status(ctx, "Normalization errors — see error panel", true);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn update_frac_preview(&mut self, ctx: &egui::Context) {
+        let nf = match &self.frac_normalized {
+            Some(nf) => nf,
+            None => return,
+        };
+
+        let cfg = EvalConfig { max_depth: self.frac_max_depth, rng_seed: 0 };
+        let tree = evaluator::evaluate(nf, &cfg);
+
+        let size = self.frac_output_size as usize;
+        let s = self.frac_output_size as f64;
+        let pixels = render_frac_tree(&tree, size, s);
+
+        let raw: Vec<u8> = pixels.iter()
+            .flat_map(|row| row.iter().flat_map(|&[r,g,b,a]| [r,g,b,a]))
+            .collect();
+        let color_image = egui::ColorImage::from_rgba_unmultiplied([size, size], &raw);
+        let mut opts = egui::TextureOptions::default();
+        opts.magnification = egui::TextureFilter::Nearest;
+        self.frac_preview_texture = Some(ctx.load_texture("frac_preview", color_image, opts));
+    }
+}
+
+fn render_frac_tree(tree: &RenderTree, size: usize, world_size: f64) -> Vec<Vec<[u8; 4]>> {
+    let mut pixels = vec![vec![[0u8, 0u8, 0u8, 255u8]; size]; size];
+    let scale = size as f64 / world_size;
+
+    for tile in &tree.tiles {
+        // Scale polygon from world space to pixel space.
+        let poly: Vec<[f32; 2]> = tile.polygon.iter()
+            .map(|&[x, y]| [(x * scale) as f32, (y * scale) as f32])
+            .collect();
+
+        let r = (tile.color[0].clamp(0.0, 1.0) * 255.0) as u8;
+        let g = (tile.color[1].clamp(0.0, 1.0) * 255.0) as u8;
+        let b = (tile.color[2].clamp(0.0, 1.0) * 255.0) as u8;
+        let a = (tile.color[3].clamp(0.0, 1.0) * 255.0) as u8;
+
+        let xs: Vec<f32> = poly.iter().map(|v| v[0]).collect();
+        let ys: Vec<f32> = poly.iter().map(|v| v[1]).collect();
+        let min_x = xs.iter().cloned().fold(f32::INFINITY, f32::min).max(0.0) as usize;
+        let max_x = (xs.iter().cloned().fold(f32::NEG_INFINITY, f32::max).ceil() as usize).min(size);
+        let min_y = ys.iter().cloned().fold(f32::INFINITY, f32::min).max(0.0) as usize;
+        let max_y = (ys.iter().cloned().fold(f32::NEG_INFINITY, f32::max).ceil() as usize).min(size);
+
+        let mut wrote = false;
+        for py in min_y..max_y {
+            for px in min_x..max_x {
+                if point_in_convex_polygon(&poly, px as f32 + 0.5, py as f32 + 0.5) {
+                    pixels[py][px] = [r, g, b, a];
+                    wrote = true;
+                }
+            }
+        }
+        if !wrote {
+            let cx = (xs.iter().sum::<f32>() / xs.len() as f32).floor() as usize;
+            let cy = (ys.iter().sum::<f32>() / ys.len() as f32).floor() as usize;
+            if cx < size && cy < size {
+                pixels[cy][cx] = [r, g, b, a];
+            }
+        }
+    }
+
+    pixels
 }
 
 impl eframe::App for FractalApp {
@@ -710,8 +827,42 @@ impl eframe::App for FractalApp {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.active_mode, AppMode::Classic, "Classic");
                 ui.selectable_value(&mut self.active_mode, AppMode::Spec, "Spec");
+                ui.selectable_value(&mut self.active_mode, AppMode::Frac, "Frac");
             });
             ui.separator();
+
+            if self.active_mode == AppMode::Frac {
+                if ui.button("Load .frac File").clicked() {
+                    self.load_frac_file(ctx);
+                }
+                ui.add(egui::Slider::new(&mut self.frac_max_depth, 1..=12).text("Max Depth"));
+                let sizes = [128u32, 256, 512, 1024];
+                ui.horizontal(|ui| {
+                    ui.label("Size:");
+                    for &s in &sizes {
+                        ui.selectable_value(&mut self.frac_output_size, s, s.to_string());
+                    }
+                });
+                if ui.button("Update Preview").clicked() {
+                    self.update_frac_preview(ctx);
+                }
+                if !self.frac_errors.is_empty() {
+                    ui.separator();
+                    ui.colored_label(egui::Color32::RED, "Errors:");
+                    egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
+                        for e in &self.frac_errors {
+                            ui.label(e.to_string());
+                        }
+                    });
+                }
+                ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+                    if let Some((message, is_error)) = &self.status_message {
+                        let color = if *is_error { egui::Color32::RED } else { egui::Color32::GREEN };
+                        ui.colored_label(color, message);
+                    }
+                });
+                return;
+            }
 
             if self.active_mode == AppMode::Spec {
                 if ui.button("Load Spec Pattern").clicked() {
@@ -842,20 +993,33 @@ impl eframe::App for FractalApp {
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            if self.active_mode == AppMode::Spec {
-                if let Some(texture) = &self.spec_preview_texture {
-                    let available = ui.available_size();
-                    let tex_size = texture.size_vec2();
-                    let scale = (available / tex_size).min_elem();
-                    let display_size = tex_size * scale;
-                    ui.centered_and_justified(|ui| {
-                        ui.image((texture.id(), display_size));
-                    });
-                } else {
-                    ui.centered_and_justified(|ui| { ui.label("Load a spec pattern to preview"); });
+            let show_texture = |ui: &mut egui::Ui, texture: &egui::TextureHandle| {
+                let available = ui.available_size();
+                let tex_size = texture.size_vec2();
+                let scale = (available / tex_size).min_elem();
+                let display_size = tex_size * scale;
+                ui.centered_and_justified(|ui| {
+                    ui.image((texture.id(), display_size));
+                });
+            };
+            match self.active_mode {
+                AppMode::Frac => {
+                    if let Some(texture) = &self.frac_preview_texture {
+                        show_texture(ui, texture);
+                    } else {
+                        ui.centered_and_justified(|ui| { ui.label("Load a .frac file to preview"); });
+                    }
                 }
-            } else {
-                self.update_preview_panel(ui);
+                AppMode::Spec => {
+                    if let Some(texture) = &self.spec_preview_texture {
+                        show_texture(ui, texture);
+                    } else {
+                        ui.centered_and_justified(|ui| { ui.label("Load a spec pattern to preview"); });
+                    }
+                }
+                AppMode::Classic => {
+                    self.update_preview_panel(ui);
+                }
             }
         });
     }

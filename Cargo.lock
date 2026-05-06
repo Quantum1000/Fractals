@@ -7,6 +7,7 @@ name = "Fractals"
 version = "0.1.0"
 dependencies = [
  "eframe",
+ "frac_lang",
  "image",
  "rfd",
  "serde",
@@ -1241,6 +1242,10 @@ checksum = "e13624c2627564efccf4934284bdd98cbaa14e79b0b5a141218e507b3a823456"
 dependencies = [
  "percent-encoding",
 ]
+
+[[package]]
+name = "frac_lang"
+version = "0.1.0"
 
 [[package]]
 name = "futures-channel"
