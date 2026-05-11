@@ -64,6 +64,7 @@ pub enum Token {
     AmpAmp,    // &&
     PipePipe,  // ||
     Bang,      // !
+    Colon,     // :
 
     // --- Sentinel / errors ---
     Eof,
@@ -123,6 +124,7 @@ impl Token {
             Token::AmpAmp       => "`&&`",
             Token::PipePipe     => "`||`",
             Token::Bang         => "`!`",
+            Token::Colon        => "`:`",
             Token::Eof          => "end of file",
             Token::Error(_)     => "unrecognised character",
         }
@@ -268,6 +270,7 @@ impl<'src> Lexer<'src> {
             ']' => Spanned::new(Token::RBracket, self.span(start)),
             '.' => Spanned::new(Token::Dot,      self.span(start)),
             ',' => Spanned::new(Token::Comma,    self.span(start)),
+            ':' => Spanned::new(Token::Colon,    self.span(start)),
             '?' => Spanned::new(Token::Question, self.span(start)),
             '+' => Spanned::new(Token::Plus,     self.span(start)),
             '*' => Spanned::new(Token::Star,     self.span(start)),

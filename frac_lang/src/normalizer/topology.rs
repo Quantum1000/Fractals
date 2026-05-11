@@ -5,8 +5,8 @@
 ///   1. Builds a planar graph (with implicit intersection vertices).
 ///   2. Enumerates faces using half-edge traversal.
 ///   3. Discards the outer face.
-///   4. Matches each inner face to a tile type via affine invariants.
-///   5. Fits the similarity transform for each child.
+///   4. Matches each inner face to a tile type by direct affine fitting.
+///   5. Records the affine transform and anchor vertex for each child.
 ///   6. Assigns child indices and names.
 
 use std::collections::HashMap;
@@ -17,26 +17,23 @@ use super::geom::Point2;
 const EPS: f64 = 1e-9;
 const MATCH_TOL: f64 = 1e-5;
 
+/// An ordered list of (tile_name, canonical_polygon), in source declaration
+/// order.  Iteration order is deterministic; first affine match wins.
+type TileCanonicals = Vec<(String, Vec<Point2>)>;
+
 // ── Public entry point ────────────────────────────────────────────────────────
 
 pub fn compute_partitions(
     file: &File,
-    tile_invariants: &HashMap<String, Vec<f64>>,
-    tile_canonicals: &HashMap<String, Vec<Point2>>,
+    tile_canonicals: &TileCanonicals,
     errors: &mut Vec<NormalizeError>,
 ) -> HashMap<(String, String), NormalizedPartition> {
     let mut result = HashMap::new();
 
-    // Build a map of tile name → canonical polygon for boundary lookups.
-    let mut tile_polygons: HashMap<String, Vec<Point2>> = HashMap::new();
-    for item in &file.items {
-        if let Item::Tile(t) = &item.node {
-            let pts: Vec<Point2> = t.canonical.iter()
-                .map(|p| [p.node.x, p.node.y])
-                .collect();
-            tile_polygons.insert(t.name.0.node.clone(), pts);
-        }
-    }
+    let tile_polygons: HashMap<&str, &[Point2]> = tile_canonicals
+        .iter()
+        .map(|(n, p)| (n.as_str(), p.as_slice()))
+        .collect();
 
     for item in &file.items {
         let part = match &item.node {
@@ -48,8 +45,8 @@ pub fn compute_partitions(
         let part_name = part.name.0.node.clone();
         let key = (tile_name.clone(), part_name.clone());
 
-        let parent_poly = match tile_polygons.get(&tile_name) {
-            Some(p) => p.clone(),
+        let parent_poly = match tile_polygons.get(tile_name.as_str()) {
+            Some(p) => p.to_vec(),
             None => {
                 errors.push(NormalizeError::UnknownTile {
                     name: tile_name.clone(),
@@ -62,7 +59,6 @@ pub fn compute_partitions(
         match compute_one_partition(
             part,
             &parent_poly,
-            tile_invariants,
             tile_canonicals,
             &key,
             errors,
@@ -80,8 +76,7 @@ pub fn compute_partitions(
 fn compute_one_partition(
     part: &PartitionDecl,
     parent_poly: &[Point2],
-    tile_invariants: &HashMap<String, Vec<f64>>,
-    tile_canonicals: &HashMap<String, Vec<Point2>>,
+    tile_canonicals: &TileCanonicals,
     key: &(String, String),
     errors: &mut Vec<NormalizeError>,
 ) -> Option<NormalizedPartition> {
@@ -196,7 +191,9 @@ fn compute_one_partition(
     // Build child name lookup from author-assigned names.
     let mut index_to_name: HashMap<u32, String> = HashMap::new();
     for cn in &part.child_names {
-        index_to_name.insert(cn.node.index.node, cn.node.name.0.node.clone());
+        if let Some(ref nm) = cn.node.name {
+            index_to_name.insert(cn.node.index.node, nm.0.node.clone());
+        }
     }
 
     // Sort faces for stable canonical ordering: by centroid (x first, then y).
@@ -223,19 +220,18 @@ fn compute_one_partition(
     let mut children = Vec::new();
     for (i, face_indices) in sorted_faces.iter().enumerate() {
         let polygon: Vec<Point2> = face_indices.iter().map(|&j| verts[j]).collect();
-        let invariants = geom::side_length_ratios(&polygon);
 
-        // Find matching tile type.
+        // Find the first declared tile (in source order) whose canonical polygon
+        // can be affine-mapped onto this face.  Under affine matching, any
+        // n-gon matches any other n-gon of the same affine class.
         let mut matched: Option<(String, [f64; 6], usize)> = None;
-        for (tname, tinvs) in tile_invariants {
-            if geom::invariants_match(&invariants, tinvs) {
-                let canonical = tile_canonicals.get(tname).unwrap();
-                if let Some((transform, anchor)) =
-                    geom::fit_similarity_to_polygon(canonical, &polygon)
-                {
-                    matched = Some((tname.clone(), transform, anchor));
-                    break;
-                }
+        for (tname, canonical) in tile_canonicals {
+            if canonical.len() != polygon.len() { continue; }
+            if let Some((transform, anchor)) =
+                geom::fit_affine_to_polygon(canonical, &polygon)
+            {
+                matched = Some((tname.clone(), transform, anchor));
+                break;
             }
         }
 
@@ -250,7 +246,6 @@ fn compute_one_partition(
             Some((tile_type, similarity_transform, anchor_vertex)) => {
                 children.push(ChildInfo {
                     tile_type,
-                    invariants,
                     polygon,
                     similarity_transform,
                     anchor_vertex,

@@ -54,7 +54,9 @@ pub fn expand(
         None => return,
     };
 
-    if depth >= cfg.max_depth {
+    let should_stop = depth >= cfg.max_depth
+        || cfg.min_size.map_or(false, |ms| scale < ms);
+    if should_stop {
         if let Some(color) = eval_color(pattern, &ctx) {
             out.push(RenderTile { polygon, color, depth });
         }
@@ -138,6 +140,8 @@ pub fn expand(
             }
         });
 
+        let mut effective_child_transform = child_transform;
+
         if let Some(inj) = injection {
             let inj_ctx = EvalContext {
                 state: &child_ctx_state,
@@ -149,11 +153,21 @@ pub fn expand(
                 let val = expr::eval(&upd.node.value.node, &inj_ctx);
                 child_state.insert(upd.node.var.0.node.clone(), val);
             }
+            // Apply alignment: remap the child's canonical vertices by the group
+            // element's vertex permutation, then fit an affine from canonical→permuted.
+            if let Some(align_expr) = &inj.node.alignment {
+                if let Some(Value::GroupElem { group: _, element }) = expr::eval(&align_expr.node, &inj_ctx) {
+                    let child_canonical = get_canonical(nf, &child.tile_type);
+                    if let Some(rot) = alignment_transform(&child.tile_type, &element, &child_canonical, nf) {
+                        effective_child_transform = geom::compose_transforms(&child_transform, &rot);
+                    }
+                }
+            }
         }
 
         expand(
             &child.tile_type,
-            &child_transform,
+            &effective_child_transform,
             child_state,
             depth + 1,
             nf,
@@ -258,10 +272,29 @@ fn decompose_transform(t: &[f64; 6], polygon: &[Point2]) -> ([f64; 2], f64, f64,
     (pos, scale, orientation, shear, stretch)
 }
 
+/// Build the affine transform for an alignment group element by looking up its
+/// vertex permutation and fitting affine canonical → permuted(canonical).
+fn alignment_transform(
+    tile_type: &str,
+    element: &str,
+    canonical: &[Point2],
+    nf: &NormalizedFile,
+) -> Option<[f64; 6]> {
+    let tile_data = nf.tiles.get(tile_type)?;
+    let entry = tile_data.group_perm.iter().find(|e| e.name == element)?;
+    let perm = &entry.perm;
+    let n = canonical.len();
+    if n < 3 || perm.len() != n { return None; }
+    // src[i] = canonical[i], dst[i] = canonical[perm[i]]
+    let src = [canonical[0], canonical[1], canonical[2]];
+    let dst = [canonical[perm[0]], canonical[perm[1]], canonical[perm[2]]];
+    geom::fit_affine_3(src, dst)
+}
+
 /// Deterministic pseudo-random value for a tile, based on its transform + depth.
 fn tile_random(t: &[f64; 6], depth: u32) -> f64 {
     // Simple hash of transform translation and depth.
     let bits = (t[2].to_bits() ^ t[5].to_bits()).wrapping_mul(6364136223846793005)
-        .wrapping_add(depth as u64 * 1442695040888963407);
+        .wrapping_add((depth as u64).wrapping_mul(1442695040888963407));
     (bits >> 11) as f64 / (1u64 << 53) as f64
 }

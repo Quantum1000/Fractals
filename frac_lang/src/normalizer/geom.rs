@@ -91,41 +91,6 @@ pub fn point_on_segment(p: Point2, a: Point2, b: Point2) -> bool {
     t >= -EPS && t <= 1.0+EPS
 }
 
-// ── Affine invariants (side-length ratios) ────────────────────────────────────
-
-/// Side-length ratio invariants for a polygon: edge_i / perimeter for each i.
-/// Invariant under similarity transforms (scale, rotation, reflection).
-pub fn side_length_ratios(poly: &[Point2]) -> Vec<f64> {
-    let n = poly.len();
-    let lengths: Vec<f64> = (0..n).map(|i| dist(poly[i], poly[(i+1)%n])).collect();
-    let perimeter: f64 = lengths.iter().sum();
-    if perimeter < EPS { return vec![1.0 / n as f64; n]; }
-    lengths.iter().map(|l| l / perimeter).collect()
-}
-
-/// Check if two ratio sequences are equal up to cyclic rotation and/or reflection.
-pub fn invariants_match(a: &[f64], b: &[f64]) -> bool {
-    let n = a.len();
-    if n != b.len() { return false; }
-    const TOL: f64 = 1e-5;
-    // Try all cyclic rotations
-    'rot: for r in 0..n {
-        for i in 0..n {
-            if (a[i] - b[(i+r)%n]).abs() > TOL { continue 'rot; }
-        }
-        return true;
-    }
-    // Try rotations of reversed b (handles reflections)
-    let b_rev: Vec<f64> = b.iter().copied().rev().collect();
-    'rev: for r in 0..n {
-        for i in 0..n {
-            if (a[i] - b_rev[(i+r)%n]).abs() > TOL { continue 'rev; }
-        }
-        return true;
-    }
-    false
-}
-
 // ── Similarity transform fitting ──────────────────────────────────────────────
 
 /// Apply affine transform [a,b,c,d,e,f] to a point:
@@ -152,7 +117,7 @@ pub const IDENTITY_TRANSFORM: [f64; 6] = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
 
 /// Fit an affine transform mapping `src[0..3]` exactly to `dst[0..3]`.
 /// Returns None if the source triangle is degenerate.
-fn fit_affine_3(src: [Point2; 3], dst: [Point2; 3]) -> Option<[f64; 6]> {
+pub fn fit_affine_3(src: [Point2; 3], dst: [Point2; 3]) -> Option<[f64; 6]> {
     // Solve 2 independent 3×3 systems (one for x', one for y'):
     //   [sx0 sy0 1] [a b c]^T = dx0, etc.
     let m = [
@@ -185,11 +150,11 @@ fn fit_affine_3(src: [Point2; 3], dst: [Point2; 3]) -> Option<[f64; 6]> {
     Some([a, b, c, d, e, f])
 }
 
-/// Find the affine transform that maps `canonical` polygon (by some cyclic rotation
+/// Find an affine transform that maps `canonical` polygon (by some cyclic rotation
 /// and optional reflection) to `actual` polygon.  Both must have the same number of
-/// vertices and matching invariants.  Returns the transform and the rotation offset
-/// (which canonical vertex maps to actual[0]).
-pub fn fit_similarity_to_polygon(
+/// vertices.  Returns the transform and the rotation offset (which canonical vertex
+/// maps to `actual[0]`).
+pub fn fit_affine_to_polygon(
     canonical: &[Point2],
     actual: &[Point2],
 ) -> Option<([f64; 6], usize)> {
@@ -234,6 +199,57 @@ pub fn fit_similarity_to_polygon(
     None
 }
 
+// ── Affine invariants (§3.3) ──────────────────────────────────────────────────
+
+/// Compute the canonical affine-invariant tuple for a polygon.
+///
+/// The result is a `(2n − 6)`-tuple (empty for n ≤ 3).  Two polygons belong
+/// to the same affine equivalence class iff their invariant tuples are equal
+/// (within floating-point tolerance).
+///
+/// Construction: enumerate all 2n labellings (n cyclic rotations × 2
+/// orientations), compute affine coordinates of remaining vertices in the
+/// basis formed by the first three, and return the lex-min tuple.
+pub fn compute_affine_invariants(poly: &[Point2]) -> Vec<f64> {
+    let n = poly.len();
+    if n < 3 { return vec![]; }
+    // 2n - 6 coordinates; for n == 3 that's 0.
+    let coord_count = 2 * n - 6;
+    if coord_count == 0 { return vec![]; }
+
+    let mut min_tuple: Option<Vec<f64>> = None;
+
+    for start in 0..n {
+        for &reversed in &[false, true] {
+            let labelling: Vec<Point2> = (0..n)
+                .map(|i| if reversed {
+                    poly[(start + n - i) % n]
+                } else {
+                    poly[(start + i) % n]
+                })
+                .collect();
+
+            // Affine map sending labelling[0]→(0,0), labelling[1]→(1,0), labelling[2]→(0,1).
+            let src = [labelling[0], labelling[1], labelling[2]];
+            let dst = [[0.0_f64, 0.0], [1.0, 0.0], [0.0, 1.0]];
+            let Some(t) = fit_affine_3(src, dst) else { continue };
+
+            let mut coords: Vec<f64> = Vec::with_capacity(coord_count);
+            for i in 3..n {
+                let p = apply_transform(&t, labelling[i]);
+                coords.push(p[0]);
+                coords.push(p[1]);
+            }
+
+            if min_tuple.is_none() || coords < *min_tuple.as_ref().unwrap() {
+                min_tuple = Some(coords);
+            }
+        }
+    }
+
+    min_tuple.unwrap_or_default()
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -271,28 +287,9 @@ mod tests {
     }
 
     #[test]
-    fn test_invariants_square() {
-        let sq = [[0.0,0.0],[1.0,0.0],[1.0,1.0],[0.0,1.0]];
-        let r = side_length_ratios(&sq);
-        assert_eq!(r.len(), 4);
-        for v in &r { assert!((v - 0.25).abs() < 1e-9); }
-    }
-
-    #[test]
-    fn test_invariants_match_rotation() {
-        let a = [0.5_f64, 0.5];
-        let b = [0.5_f64, 0.5];
-        assert!(invariants_match(&a, &b));
-        let a2 = [0.3_f64, 0.7];
-        let b2 = [0.7_f64, 0.3];
-        // b2 is a rotation of a2 (len-2 array, rotation by 1 = same as reflection)
-        assert!(invariants_match(&a2, &b2));
-    }
-
-    #[test]
-    fn test_fit_similarity_identity() {
+    fn test_fit_affine_identity() {
         let sq: Vec<Point2> = vec![[0.0,0.0],[1.0,0.0],[1.0,1.0],[0.0,1.0]];
-        let (t, offset) = fit_similarity_to_polygon(&sq, &sq).unwrap();
+        let (t, offset) = fit_affine_to_polygon(&sq, &sq).unwrap();
         assert_eq!(offset, 0);
         for p in &sq {
             let tp = apply_transform(&t, *p);
@@ -301,13 +298,79 @@ mod tests {
     }
 
     #[test]
-    fn test_fit_similarity_scaled() {
+    fn test_fit_affine_scaled() {
         let can: Vec<Point2> = vec![[0.0,0.0],[1.0,0.0],[1.0,1.0],[0.0,1.0]];
-        // Scaled by 0.5 and translated to (1, 2)
         let actual: Vec<Point2> = vec![[1.0,2.0],[1.5,2.0],[1.5,2.5],[1.0,2.5]];
-        let (t, _) = fit_similarity_to_polygon(&can, &actual).unwrap();
+        let (t, _) = fit_affine_to_polygon(&can, &actual).unwrap();
         for (i, p) in can.iter().enumerate() {
             assert!(dist(apply_transform(&t, *p), actual[i]) < 1e-6);
         }
+    }
+
+    #[test]
+    fn test_fit_affine_matches_sheared_quad() {
+        // Affine matching: a unit square should map to an arbitrary
+        // parallelogram (they are affine-equivalent).
+        let can: Vec<Point2> = vec![[0.0,0.0],[1.0,0.0],[1.0,1.0],[0.0,1.0]];
+        let actual: Vec<Point2> = vec![[0.0,0.0],[2.0,0.0],[3.0,1.0],[1.0,1.0]];
+        let fit = fit_affine_to_polygon(&can, &actual);
+        assert!(fit.is_some(), "parallelogram should affine-match square");
+    }
+
+    #[test]
+    fn test_affine_invariants_triangle() {
+        // Any non-degenerate triangle → empty tuple
+        let tri = [[0.0,0.0],[1.0,0.0],[0.5,1.0]];
+        assert!(compute_affine_invariants(&tri).is_empty());
+    }
+
+    #[test]
+    fn test_affine_invariants_unit_square() {
+        // Unit square → (-1, 1) per spec §3.3 examples
+        let sq: Vec<Point2> = vec![[0.0,0.0],[1.0,0.0],[1.0,1.0],[0.0,1.0]];
+        let inv = compute_affine_invariants(&sq);
+        assert_eq!(inv.len(), 2);
+        assert!((inv[0] - (-1.0)).abs() < 1e-9, "inv[0] = {}", inv[0]);
+        assert!((inv[1] - 1.0).abs() < 1e-9,    "inv[1] = {}", inv[1]);
+    }
+
+    #[test]
+    fn test_affine_invariants_sheared_parallelogram_matches_square() {
+        // Any parallelogram is affinely equivalent to the unit square.
+        let sq:   Vec<Point2> = vec![[0.0,0.0],[1.0,0.0],[1.0,1.0],[0.0,1.0]];
+        let para: Vec<Point2> = vec![[0.0,0.0],[2.0,0.0],[3.0,1.0],[1.0,1.0]];
+        let inv_sq   = compute_affine_invariants(&sq);
+        let inv_para = compute_affine_invariants(&para);
+        assert_eq!(inv_sq.len(), inv_para.len());
+        for (a, b) in inv_sq.iter().zip(inv_para.iter()) {
+            assert!((a - b).abs() < 1e-9, "invariants differ: {:?} vs {:?}", inv_sq, inv_para);
+        }
+    }
+
+    #[test]
+    fn test_affine_invariants_non_parallelogram_quad() {
+        // (0,0)(1,0)(1,1)(0,2) → (-2, 1) per spec §3.3 examples
+        let quad: Vec<Point2> = vec![[0.0,0.0],[1.0,0.0],[1.0,1.0],[0.0,2.0]];
+        let inv = compute_affine_invariants(&quad);
+        assert_eq!(inv.len(), 2);
+        assert!((inv[0] - (-2.0)).abs() < 1e-9, "inv[0] = {}", inv[0]);
+        assert!((inv[1] - 1.0).abs() < 1e-9,    "inv[1] = {}", inv[1]);
+    }
+
+    #[test]
+    fn test_affine_invariants_distinguishes_non_equivalent_quads() {
+        let sq:   Vec<Point2> = vec![[0.0,0.0],[1.0,0.0],[1.0,1.0],[0.0,1.0]];
+        let quad: Vec<Point2> = vec![[0.0,0.0],[1.0,0.0],[1.0,1.0],[0.0,2.0]];
+        let inv_sq   = compute_affine_invariants(&sq);
+        let inv_quad = compute_affine_invariants(&quad);
+        assert_ne!(inv_sq, inv_quad);
+    }
+
+    #[test]
+    fn test_fit_affine_rejects_non_affine_equivalent() {
+        // A regular pentagon cannot affine-match a square (different vertex count).
+        let can: Vec<Point2> = vec![[0.0,0.0],[1.0,0.0],[1.0,1.0],[0.0,1.0]];
+        let actual: Vec<Point2> = vec![[0.0,0.0],[1.0,0.0],[1.0,1.0],[0.5,1.5],[0.0,1.0]];
+        assert!(fit_affine_to_polygon(&can, &actual).is_none());
     }
 }

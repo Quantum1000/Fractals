@@ -42,48 +42,48 @@ pattern {
         decay  = 0.6
     }
 
-    color (r ? 0, g ? 0, b ? 1, 1)
+    color (r, g, b, 1)
 
     rule quad {
         -> quad.quad_split {
-            # child 0: inner rotated quad [m_s, m_e, m_n, m_w]
+            # top left tri, rotated 1/3 clockwise for some reason
             child 0 {
-                r      = lerp(target, r, 0)
-                g      = lerp(target, g, 0)
-                b      = lerp(target, b, 0)
-                target = lerp(0.1, target, factor * decay)
+                r      = lerp(r, 0.5, target)
+                g      = lerp(g, 0.5, target)
+                b      = lerp(b, 0.5, target)
+                target = factor * decay
                 factor = factor * decay
+                alignment = d3.r240
             }
-            # child 1: bottom-left tri [m_w, v0, m_s]
+            # bottom left tri
             child 1 {
-                r      = lerp(target, r, 0.24742047)
-                g      = lerp(target, g, 0.24742047)
-                b      = lerp(target, b, 0.24742047)
-                target = lerp(1.0, target, factor * decay)
+                r      = lerp(r, 0.6, target)
+                g      = lerp(g, 0.6, target)
+                b      = lerp(b, 0.0, target)
                 factor = factor * decay
             }
-            # child 2: bottom-right tri [m_s, v1, m_e]
+            # center quad
             child 2 {
-                r      = lerp(target, r, 0.0)
-                g      = lerp(target, g, 0.0)
-                b      = lerp(target, b, 0.1)
-                target = lerp(1.0, target, factor * decay)
+                r      = lerp(r, 0.0, target)
+                g      = lerp(g, 0.0, target)
+                b      = lerp(b, 0.0, target)
+                target = lerp(target, factor * decay, 0.1)
                 factor = factor * decay
             }
-            # child 3: top-right tri [m_e, v2, m_n]
+            # top right tri
             child 3 {
-                r      = lerp(target, r, 0.1)
-                g      = lerp(target, g, 0.1)
-                b      = lerp(target, b, 0.0)
-                target = lerp(0.5, target, factor * decay)
+                r      = lerp(r, 0.0, target)
+                g      = lerp(g, 0.0, target)
+                b      = lerp(b, 0.3, target)
+                target = factor * decay
                 factor = factor * decay
             }
-            # child 4: top-left tri [m_n, v3, m_w]
+            # bottom right quad
             child 4 {
-                r      = lerp(target, r, 0.2)
-                g      = lerp(target, g, 0.2)
-                b      = lerp(target, b, 0.0)
-                target = lerp(0.0, target, factor * decay)
+                r      = lerp(r, 0.3, target)
+                g      = lerp(g, 0.2, target)
+                b      = lerp(b, 0.0, target)
+                target = lerp(target, factor * decay, 0.5)
                 factor = factor * decay
             }
         }
@@ -91,29 +91,30 @@ pattern {
 
     rule tri {
         -> tri.tri_split {
-            # child 0: quad [m_s, v1, m_e, mid]
+            # tri
             child 0 {
-                r      = lerp(target, r, 0)
-                g      = lerp(target, g, 0)
-                b      = lerp(target, b, 0)
-                target = lerp(0.1, target, factor * decay)
+                r      = lerp(r, 0.8, target)
+                g      = lerp(g, 0.8, target)
+                b      = lerp(b, 1, target)
+                target = factor * decay
                 factor = factor * decay
             }
-            # child 1: tri [v0, m_s, mid]
+            # quad
             child 1 {
-                r      = lerp(target, r, 0.5)
-                g      = lerp(target, g, 0.5)
-                b      = lerp(target, b, 0.6)
-                target = lerp(1.0, target, factor * decay)
+                r      = lerp(r, 0.0, target)
+                g      = lerp(g, 0.0, target)
+                b      = lerp(b, 0.0, target)
+                target = lerp(target, factor * decay, 0.1)
                 factor = factor * decay
             }
-            # child 2: tri [mid, m_e, v2]
+            # tri, also rotated 1/3 clockwise
             child 2 {
-                r      = lerp(target, r, 0.3)
-                g      = lerp(target, g, 0.2)
-                b      = lerp(target, b, 0.0)
-                target = lerp(1.0, target, factor * decay)
+                r      = lerp(r, 0.8, target)
+                g      = lerp(g, 0.5, target)
+                b      = lerp(b, 0.0, target)
+                target = factor * decay
                 factor = factor * decay
+                alignment = d3.r240
             }
         }
     }

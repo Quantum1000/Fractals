@@ -265,6 +265,18 @@ impl Parser {
         self.expect(&Token::KwPartition);
         let tile = self.expect_tile_ref();
         self.expect(&Token::Dot);
+
+        // Distinguish `tile.name { }` from `tile.class.name { }` (§3.4).
+        let tile_is_class = if matches!(self.peek().node, Token::Ident(ref s) if s == "class")
+            && matches!(self.peek2().node, Token::Dot)
+        {
+            self.advance(); // consume 'class'
+            self.advance(); // consume '.'
+            true
+        } else {
+            false
+        };
+
         let name = self.expect_partition_ref();
         self.expect(&Token::LBrace);
 
@@ -297,15 +309,39 @@ impl Parser {
                     cuts.push(Spanned::new(Cut { from, to }, Span { start, end }));
                 }
                 Token::KwChild => {
+                    // §4.6 forms:
+                    //   child N = name
+                    //   child N = name : tile
+                    //   child N : tile
                     let start = self.current_span().start;
                     self.advance();
                     let index = self.expect_u32();
                     let index_span = Span { start, end: self.current_span().start };
-                    self.expect(&Token::Equals);
-                    let cname = self.expect_child_name_ref();
+
+                    let (cname, tile_override) = if self.eat(&Token::Equals) {
+                        // child N = name [: tile]
+                        let nm = self.expect_child_name_ref();
+                        let tile_ov = if self.eat(&Token::Colon) {
+                            Some(self.expect_tile_ref())
+                        } else {
+                            None
+                        };
+                        (Some(nm), tile_ov)
+                    } else if self.eat(&Token::Colon) {
+                        // child N : tile  (no name)
+                        (None, Some(self.expect_tile_ref()))
+                    } else {
+                        let span = self.current_span();
+                        self.error(
+                            format!("expected `=` or `:` after child index, found {}", self.peek().node.describe()),
+                            span,
+                        );
+                        (None, None)
+                    };
+
                     let end = self.current_span().start;
                     child_names.push(Spanned::new(
-                        ChildName { index: Spanned::new(index, index_span), name: cname },
+                        ChildName { index: Spanned::new(index, index_span), name: cname, tile_override },
                         Span { start, end },
                     ));
                 }
@@ -317,7 +353,7 @@ impl Parser {
             }
         }
         self.expect(&Token::RBrace);
-        PartitionDecl { tile, name, vertices, cuts, child_names }
+        PartitionDecl { tile, tile_is_class, name, vertices, cuts, child_names }
     }
 
     // -----------------------------------------------------------------------
@@ -456,10 +492,22 @@ impl Parser {
     }
 
     // rule <tile> { <rule_body> }
+    // rule <tile>.class { <rule_body> }   (§7.3.1 class-level rule)
     // rule <tile> -> <tile>.<part> { <substitution> }   (shorthand)
     fn parse_rule_decl(&mut self) -> RuleDecl {
         self.expect(&Token::KwRule);
         let tile = self.expect_tile_ref();
+
+        // Detect `tile.class { }` form (§7.3.1).
+        let tile_is_class = if self.at(&Token::Dot)
+            && matches!(self.peek2().node, Token::Ident(ref s) if s == "class")
+        {
+            self.advance(); // consume '.'
+            self.advance(); // consume 'class'
+            true
+        } else {
+            false
+        };
 
         let start = self.current_span().start;
         let body = if self.at(&Token::Arrow) {
@@ -474,7 +522,7 @@ impl Parser {
             body
         };
 
-        RuleDecl { tile, body }
+        RuleDecl { tile, tile_is_class, body }
     }
 
     // rule_body = if_branch | substitution
@@ -600,6 +648,7 @@ impl Parser {
         self.expect(&Token::LBrace);
         let mut updates = Vec::new();
         let mut alignment = None;
+        let mut tile_override = None;
 
         while !self.at(&Token::RBrace) && !self.at(&Token::Eof) {
             match self.peek().node.clone() {
@@ -610,6 +659,29 @@ impl Parser {
                     let expr = self.parse_expr();
                     let end = self.current_span().start;
                     alignment = Some(Spanned::new(expr.node, Span { start, end }));
+                }
+                // `tile = <expr>` — §7.3.4 tile-type injection
+                Token::Ident(ref s) if s == "tile" => {
+                    let start = self.current_span().start;
+                    self.advance(); // consume 'tile'
+                    if self.at(&Token::Equals) {
+                        self.advance(); // consume '='
+                        let expr = self.parse_expr();
+                        let end = self.current_span().start;
+                        tile_override = Some(Spanned::new(expr.node, Span { start, end }));
+                    } else {
+                        // Not `tile = ...`; treat as a state variable update named 'tile'.
+                        self.expect(&Token::Equals);
+                        let value = self.parse_expr();
+                        let end = self.current_span().start;
+                        updates.push(Spanned::new(
+                            StateUpdate {
+                                var: VarRef(Spanned::new("tile".into(), Span { start, end })),
+                                value,
+                            },
+                            Span { start, end },
+                        ));
+                    }
                 }
                 Token::Ident(_) => {
                     updates.push(self.parse_state_update());
@@ -623,7 +695,7 @@ impl Parser {
         }
         self.expect(&Token::RBrace);
         let end = self.current_span().start;
-        Spanned::new(ChildInjection { child, updates, alignment }, Span { start, end })
+        Spanned::new(ChildInjection { child, updates, alignment, tile_override }, Span { start, end })
     }
 
     // slot_order [<tile> | <tile>.class] = <expr>

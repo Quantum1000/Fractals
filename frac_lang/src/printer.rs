@@ -105,7 +105,9 @@ fn print_partition_decl(p: &mut Printer, d: &PartitionDecl) {
     }
 
     for cn in &d.child_names {
-        p.line(&format!("child {} = {}", cn.node.index.node, cn.node.name.0.node));
+        let name_part = cn.node.name.as_ref().map(|n| format!(" = {}", n.0.node)).unwrap_or_default();
+        let tile_part = cn.node.tile_override.as_ref().map(|t| format!(" : {}", t.0.node)).unwrap_or_default();
+        p.line(&format!("child {}{}{}", cn.node.index.node, name_part, tile_part));
     }
 
     p.dedent();

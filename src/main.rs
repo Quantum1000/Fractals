@@ -394,6 +394,9 @@ enum AppMode { Classic, Spec, Frac }
 #[derive(PartialEq, Clone)]
 enum SpecStopMode { Threshold, MaxDepth }
 
+#[derive(PartialEq, Clone)]
+enum FracStopMode { MaxDepth, SizeCutoff }
+
 struct FractalApp {
     pattern: Pattern,
     preview_texture: Option<egui::TextureHandle>,
@@ -418,6 +421,8 @@ struct FractalApp {
     frac_preview_texture: Option<egui::TextureHandle>,
     frac_max_depth: u32,
     frac_output_size: u32,
+    frac_stop_mode: FracStopMode,
+    frac_min_size: f64,
 }
 
 impl FractalApp {
@@ -444,6 +449,8 @@ impl FractalApp {
             frac_preview_texture: None,
             frac_max_depth: 6,
             frac_output_size: 512,
+            frac_stop_mode: FracStopMode::MaxDepth,
+            frac_min_size: 2.0,
         }
     }
     
@@ -746,18 +753,124 @@ impl FractalApp {
         }
     }
 
+    fn export_frac_preview(&mut self, ctx: &egui::Context) {
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("PNG", &["png"])
+            .set_title("Export Frac PNG")
+            .save_file()
+        {
+            let nf = match &self.frac_normalized {
+                Some(nf) => nf,
+                None => { self.update_status(ctx, "No .frac file loaded", true); return; }
+            };
+
+            let root_bbox = {
+                use frac_lang::ast::Item;
+                let root_name = nf.file.items.iter().find_map(|i| {
+                    if let Item::Pattern(p) = &i.node { Some(p.root.0.node.clone()) } else { None }
+                });
+                root_name.and_then(|name| {
+                    nf.file.items.iter().find_map(|i| {
+                        if let Item::Tile(t) = &i.node {
+                            if t.name.0.node == name { Some(t.canonical.iter()
+                                .map(|p| [p.node.x, p.node.y])
+                                .collect::<Vec<_>>()) }
+                            else { None }
+                        } else { None }
+                    })
+                })
+            };
+
+            let pixel_scale = root_bbox.as_deref().and_then(|pts| {
+                if pts.is_empty() { return None; }
+                let min_x = pts.iter().map(|p| p[0]).fold(f64::INFINITY, f64::min);
+                let max_x = pts.iter().map(|p| p[0]).fold(f64::NEG_INFINITY, f64::max);
+                let min_y = pts.iter().map(|p| p[1]).fold(f64::INFINITY, f64::min);
+                let max_y = pts.iter().map(|p| p[1]).fold(f64::NEG_INFINITY, f64::max);
+                let world_span = (max_x - min_x).max(max_y - min_y);
+                if world_span <= 0.0 { None } else {
+                    Some(self.frac_output_size as f64 * 0.98 / world_span)
+                }
+            }).unwrap_or(1.0);
+
+            let min_size = match self.frac_stop_mode {
+                FracStopMode::MaxDepth => None,
+                FracStopMode::SizeCutoff => Some(self.frac_min_size / pixel_scale),
+            };
+            let max_depth = match self.frac_stop_mode {
+                FracStopMode::MaxDepth => self.frac_max_depth,
+                FracStopMode::SizeCutoff => u32::MAX,
+            };
+            let cfg = EvalConfig { max_depth, rng_seed: 0, min_size };
+            let tree = evaluator::evaluate(nf, &cfg);
+
+            let size = self.frac_output_size;
+            let pixels = render_frac_tree(&tree, size as usize, root_bbox.as_deref());
+            let mut image = ImageBuffer::new(size, size);
+            for (y, row) in pixels.iter().enumerate() {
+                for (x, &[r, g, b, a]) in row.iter().enumerate() {
+                    image.put_pixel(x as u32, y as u32, Rgba([r, g, b, a]));
+                }
+            }
+            match image.save(&path) {
+                Ok(_) => self.update_status(ctx, "Frac PNG exported", false),
+                Err(e) => self.update_status(ctx, &format!("Export failed: {}", e), true),
+            }
+        }
+    }
+
     fn update_frac_preview(&mut self, ctx: &egui::Context) {
         let nf = match &self.frac_normalized {
             Some(nf) => nf,
             None => return,
         };
 
-        let cfg = EvalConfig { max_depth: self.frac_max_depth, rng_seed: 0 };
+        // Find the root tile's canonical polygon to get the bounding box.
+        let root_bbox = {
+            use frac_lang::ast::{Item};
+            let root_name = nf.file.items.iter().find_map(|i| {
+                if let Item::Pattern(p) = &i.node { Some(p.root.0.node.clone()) } else { None }
+            });
+            root_name.and_then(|name| {
+                nf.file.items.iter().find_map(|i| {
+                    if let Item::Tile(t) = &i.node {
+                        if t.name.0.node == name { Some(t.canonical.iter()
+                            .map(|p| [p.node.x, p.node.y])
+                            .collect::<Vec<_>>()) }
+                        else { None }
+                    } else { None }
+                })
+            })
+        };
+
+        // Convert pixel-space min_size to world-space by dividing by the
+        // world-to-pixel scale factor used in render_frac_tree.
+        let min_size = match self.frac_stop_mode {
+            FracStopMode::MaxDepth => None,
+            FracStopMode::SizeCutoff => {
+                let pixel_scale = root_bbox.as_deref().and_then(|pts| {
+                    if pts.is_empty() { return None; }
+                    let min_x = pts.iter().map(|p| p[0]).fold(f64::INFINITY, f64::min);
+                    let max_x = pts.iter().map(|p| p[0]).fold(f64::NEG_INFINITY, f64::max);
+                    let min_y = pts.iter().map(|p| p[1]).fold(f64::INFINITY, f64::min);
+                    let max_y = pts.iter().map(|p| p[1]).fold(f64::NEG_INFINITY, f64::max);
+                    let world_span = (max_x - min_x).max(max_y - min_y);
+                    if world_span <= 0.0 { None } else {
+                        Some(self.frac_output_size as f64 * 0.98 / world_span)
+                    }
+                }).unwrap_or(1.0);
+                Some(self.frac_min_size / pixel_scale)
+            }
+        };
+        let max_depth = match self.frac_stop_mode {
+            FracStopMode::MaxDepth => self.frac_max_depth,
+            FracStopMode::SizeCutoff => u32::MAX,
+        };
+        let cfg = EvalConfig { max_depth, rng_seed: 0, min_size };
         let tree = evaluator::evaluate(nf, &cfg);
 
         let size = self.frac_output_size as usize;
-        let s = self.frac_output_size as f64;
-        let pixels = render_frac_tree(&tree, size, s);
+        let pixels = render_frac_tree(&tree, size, root_bbox.as_deref());
 
         let raw: Vec<u8> = pixels.iter()
             .flat_map(|row| row.iter().flat_map(|&[r,g,b,a]| [r,g,b,a]))
@@ -769,14 +882,30 @@ impl FractalApp {
     }
 }
 
-fn render_frac_tree(tree: &RenderTree, size: usize, world_size: f64) -> Vec<Vec<[u8; 4]>> {
+fn render_frac_tree(tree: &RenderTree, size: usize, root_poly: Option<&[[f64; 2]]>) -> Vec<Vec<[u8; 4]>> {
     let mut pixels = vec![vec![[0u8, 0u8, 0u8, 255u8]; size]; size];
-    let scale = size as f64 / world_size;
+
+    let bbox_pts: &[[f64; 2]] = match root_poly {
+        Some(p) if !p.is_empty() => p,
+        _ => return pixels,
+    };
+    let min_x = bbox_pts.iter().map(|p| p[0]).fold(f64::INFINITY, f64::min);
+    let min_y = bbox_pts.iter().map(|p| p[1]).fold(f64::INFINITY, f64::min);
+    let max_x = bbox_pts.iter().map(|p| p[0]).fold(f64::NEG_INFINITY, f64::max);
+    let max_y = bbox_pts.iter().map(|p| p[1]).fold(f64::NEG_INFINITY, f64::max);
+
+    let world_w = max_x - min_x;
+    let world_h = max_y - min_y;
+    if world_w <= 0.0 || world_h <= 0.0 { return pixels; }
+
+    let scale = (size as f64 * 0.98) / world_w.max(world_h);
+    let pad = size as f64 * 0.01;
+    let off_x = pad - min_x * scale;
+    let off_y = pad - min_y * scale;
 
     for tile in &tree.tiles {
-        // Scale polygon from world space to pixel space.
         let poly: Vec<[f32; 2]> = tile.polygon.iter()
-            .map(|&[x, y]| [(x * scale) as f32, (y * scale) as f32])
+            .map(|&[x, y]| [(x * scale + off_x) as f32, (y * scale + off_y) as f32])
             .collect();
 
         let r = (tile.color[0].clamp(0.0, 1.0) * 255.0) as u8;
@@ -835,7 +964,19 @@ impl eframe::App for FractalApp {
                 if ui.button("Load .frac File").clicked() {
                     self.load_frac_file(ctx);
                 }
-                ui.add(egui::Slider::new(&mut self.frac_max_depth, 1..=12).text("Max Depth"));
+                ui.horizontal(|ui| {
+                    ui.label("Stop by:");
+                    ui.selectable_value(&mut self.frac_stop_mode, FracStopMode::MaxDepth, "Max Depth");
+                    ui.selectable_value(&mut self.frac_stop_mode, FracStopMode::SizeCutoff, "Size Cutoff");
+                });
+                match self.frac_stop_mode {
+                    FracStopMode::MaxDepth => {
+                        ui.add(egui::Slider::new(&mut self.frac_max_depth, 1..=12).text("Max Depth"));
+                    }
+                    FracStopMode::SizeCutoff => {
+                        ui.add(egui::Slider::new(&mut self.frac_min_size, 0.5..=64.0).text("Min Size (px)").logarithmic(true));
+                    }
+                }
                 let sizes = [128u32, 256, 512, 1024];
                 ui.horizontal(|ui| {
                     ui.label("Size:");
@@ -845,6 +986,9 @@ impl eframe::App for FractalApp {
                 });
                 if ui.button("Update Preview").clicked() {
                     self.update_frac_preview(ctx);
+                }
+                if ui.button("Export PNG").clicked() {
+                    self.export_frac_preview(ctx);
                 }
                 if !self.frac_errors.is_empty() {
                     ui.separator();

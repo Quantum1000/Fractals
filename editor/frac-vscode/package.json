@@ -1,0 +1,46 @@
+{
+  "name": "frac-vscode",
+  "displayName": "frac language",
+  "description": "Syntax highlighting and language server for .frac substitution-tiling files",
+  "version": "0.1.0",
+  "publisher": "frac-local",
+  "engines": { "vscode": "^1.75.0" },
+  "categories": ["Programming Languages"],
+  "main": "./out/extension.js",
+  "activationEvents": ["onLanguage:frac"],
+  "contributes": {
+    "languages": [{
+      "id": "frac",
+      "extensions": [".frac"],
+      "configuration": "./language-configuration.json"
+    }],
+    "grammars": [{
+      "language": "frac",
+      "scopeName": "source.frac",
+      "path": "./syntaxes/frac.tmLanguage.json"
+    }],
+    "configuration": {
+      "type": "object",
+      "title": "frac",
+      "properties": {
+        "frac.serverPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the frac_lang_lsp binary. If empty, falls back to FRAC_LSP_PATH env var or PATH lookup."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "watch": "tsc -p . -w"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.75.0",
+    "typescript": "^5.3.0"
+  }
+}

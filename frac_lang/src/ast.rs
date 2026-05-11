@@ -86,7 +86,10 @@ pub enum SymmetryGroup {
 
 #[derive(Clone, Debug)]
 pub struct PartitionDecl {
+    /// The tile (or representative tile of a class) this partition belongs to.
     pub tile: TileRef,
+    /// True when the head was `tile.class.name` instead of `tile.name`.
+    pub tile_is_class: bool,
     pub name: PartitionRef,
     pub vertices: Vec<Spanned<PartitionVertex>>,
     pub cuts: Vec<Spanned<Cut>>,
@@ -119,7 +122,10 @@ pub struct Cut {
 #[derive(Clone, Debug)]
 pub struct ChildName {
     pub index: Spanned<u32>,
-    pub name: ChildNameRef,
+    /// `child N = name` — author-assigned human name (optional).
+    pub name: Option<ChildNameRef>,
+    /// `child N = name : tile` or `child N : tile` — explicit tile-type override (§4.6).
+    pub tile_override: Option<TileRef>,
 }
 
 // ---------------------------------------------------------------------------
@@ -179,7 +185,10 @@ pub struct ColorExpr {
 
 #[derive(Clone, Debug)]
 pub struct RuleDecl {
+    /// The tile (or representative tile of a class) this rule targets.
     pub tile: TileRef,
+    /// True when the head was `rule tile.class { … }` instead of `rule tile { … }`.
+    pub tile_is_class: bool,
     pub body: Spanned<RuleBody>,
 }
 
@@ -225,6 +234,8 @@ pub struct ChildInjection {
     /// Optional alignment override (discrete orientation from symmetry group).
     /// The specific implementation of this feature is uncertain and subject to change.
     pub alignment: Option<Spanned<Expr>>,
+    /// Optional tile-type override for this child slot (§7.3.4).
+    pub tile_override: Option<Spanned<Expr>>,
 }
 
 /// Reference to a child in a substitution block: by author-assigned name or by index.

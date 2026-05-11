@@ -26,6 +26,7 @@ pub enum Type {
     Bool,
     GroupElem(SymmetryGroup),
     Perm(u32), // Perm(n) — a permutation of n items
+    TileRef,   // §10.1 — a tile-type identifier
 }
 
 impl std::fmt::Display for Type {
@@ -35,6 +36,7 @@ impl std::fmt::Display for Type {
             Type::Bool => write!(f, "bool"),
             Type::GroupElem(g) => write!(f, "group_elem({g:?})"),
             Type::Perm(n) => write!(f, "perm({n})"),
+            Type::TileRef => write!(f, "tile_ref"),
         }
     }
 }
@@ -55,9 +57,17 @@ pub fn check(
     partitions: &HashMap<(String, String), NormalizedPartition>,
     errors: &mut Vec<NormalizeError>,
 ) {
+    // Collect tile names for §10.2 tile-ref literal resolution (§5.4 step 3).
+    let tile_names: std::collections::HashSet<String> = file.items.iter()
+        .filter_map(|item| match &item.node {
+            Item::Tile(t) => Some(t.name.0.node.clone()),
+            _ => None,
+        })
+        .collect();
+
     for item in &file.items {
         if let Item::Pattern(pat) = &item.node {
-            check_pattern(pat, partitions, errors);
+            check_pattern(pat, partitions, &tile_names, errors);
         }
     }
 }
@@ -65,6 +75,7 @@ pub fn check(
 fn check_pattern(
     pat: &PatternDecl,
     partitions: &HashMap<(String, String), NormalizedPartition>,
+    tile_names: &std::collections::HashSet<String>,
     errors: &mut Vec<NormalizeError>,
 ) {
     // Build environment from state block.
@@ -75,7 +86,7 @@ fn check_pattern(
         let (ty, nullable) = match &sv.node.initial {
             None => (Type::Float, Nullable::Yes),
             Some(init) => {
-                let (ty, n) = infer_expr(&init.node, &env, errors);
+                let (ty, n) = infer_expr(&init.node, &env, tile_names, errors);
                 (ty, n)
             }
         };
@@ -89,7 +100,7 @@ fn check_pattern(
         ("b", &pat.color.node.b),
         ("a", &pat.color.node.a),
     ] {
-        let (ty, nullable) = infer_expr(&expr.node, &env, errors);
+        let (ty, nullable) = infer_expr(&expr.node, &env, tile_names, errors);
         if ty != Type::Float {
             errors.push(NormalizeError::TypeMismatch {
                 expected: "float".into(),
@@ -105,7 +116,7 @@ fn check_pattern(
     // Check rules.
     for rule in &pat.rules {
         let tile_name = rule.node.tile.0.node.clone();
-        check_rule_body(&rule.node.body, &env, partitions, &tile_name, errors);
+        check_rule_body(&rule.node.body, &env, partitions, tile_names, &tile_name, errors);
     }
 }
 
@@ -113,12 +124,13 @@ fn check_rule_body(
     body: &Spanned<RuleBody>,
     env: &Env,
     partitions: &HashMap<(String, String), NormalizedPartition>,
+    tile_names: &std::collections::HashSet<String>,
     tile_name: &str,
     errors: &mut Vec<NormalizeError>,
 ) {
     match &body.node {
         RuleBody::If { condition, then_branch, else_branch } => {
-            let (ty, _) = infer_expr(&condition.node, env, errors);
+            let (ty, _) = infer_expr(&condition.node, env, tile_names, errors);
             if ty != Type::Bool {
                 errors.push(NormalizeError::TypeMismatch {
                     expected: "bool".into(),
@@ -126,11 +138,11 @@ fn check_rule_body(
                     span: condition.span,
                 });
             }
-            check_rule_body(then_branch, env, partitions, tile_name, errors);
-            check_rule_body(else_branch, env, partitions, tile_name, errors);
+            check_rule_body(then_branch, env, partitions, tile_names, tile_name, errors);
+            check_rule_body(else_branch, env, partitions, tile_names, tile_name, errors);
         }
         RuleBody::Substitute(sub) => {
-            check_substitution(&sub.node, env, partitions, errors);
+            check_substitution(&sub.node, env, partitions, tile_names, errors);
         }
     }
 }
@@ -139,6 +151,7 @@ fn check_substitution(
     sub: &Substitution,
     env: &Env,
     partitions: &HashMap<(String, String), NormalizedPartition>,
+    tile_names: &std::collections::HashSet<String>,
     errors: &mut Vec<NormalizeError>,
 ) {
     // Apply tile-level updates sequentially (each update visible to subsequent ones).
@@ -146,7 +159,7 @@ fn check_substitution(
 
     for upd in &sub.updates {
         let var_name = &upd.node.var.0.node;
-        let (ty, nullable) = infer_expr(&upd.node.value.node, &env, errors);
+        let (ty, nullable) = infer_expr(&upd.node.value.node, &env, tile_names, errors);
         if let Some((expected_ty, _)) = env.get(var_name.as_str()) {
             if *expected_ty != ty {
                 errors.push(NormalizeError::TypeMismatch {
@@ -170,7 +183,7 @@ fn check_substitution(
     for inj in &sub.child_injections {
         for upd in &inj.node.updates {
             let var_name = &upd.node.var.0.node;
-            let (ty, _) = infer_expr(&upd.node.value.node, &child_env, errors);
+            let (ty, _) = infer_expr(&upd.node.value.node, &child_env, tile_names, errors);
             if let Some((expected_ty, _)) = env.get(var_name.as_str()) {
                 if *expected_ty != ty {
                     errors.push(NormalizeError::TypeMismatch {
@@ -183,7 +196,7 @@ fn check_substitution(
         }
         // Alignment expression, if present, must be Perm or GroupElem.
         if let Some(align) = &inj.node.alignment {
-            let (ty, _) = infer_expr(&align.node, &child_env, errors);
+            let (ty, _) = infer_expr(&align.node, &child_env, tile_names, errors);
             if !matches!(ty, Type::Perm(_) | Type::GroupElem(_)) {
                 errors.push(NormalizeError::TypeMismatch {
                     expected: "perm or group_elem".into(),
@@ -192,11 +205,22 @@ fn check_substitution(
                 });
             }
         }
+        // tile_override expression, if present, must be TileRef.
+        if let Some(tile_ov) = &inj.node.tile_override {
+            let (ty, _) = infer_expr(&tile_ov.node, &child_env, tile_names, errors);
+            if ty != Type::TileRef {
+                errors.push(NormalizeError::TypeMismatch {
+                    expected: "tile_ref".into(),
+                    found: ty.to_string(),
+                    span: tile_ov.span,
+                });
+            }
+        }
     }
 
     // Check slot_order expressions — must be Perm or GroupElem.
     for so in &sub.slot_orders {
-        let (ty, _) = infer_expr(&so.node.value.node, &env, errors);
+        let (ty, _) = infer_expr(&so.node.value.node, &env, tile_names, errors);
         if !matches!(ty, Type::Perm(_) | Type::GroupElem(_)) {
             errors.push(NormalizeError::InvalidSlotOrder {
                 span: so.node.value.span,
@@ -209,7 +233,12 @@ fn check_substitution(
 /// Infer the type and nullability of an expression, reporting errors for
 /// obvious type mismatches.  Returns (Type::Float, Nullable::Yes) as the
 /// "error recovery" type so downstream checks can continue.
-pub fn infer_expr(expr: &Expr, env: &Env, errors: &mut Vec<NormalizeError>) -> (Type, Nullable) {
+pub fn infer_expr(
+    expr: &Expr,
+    env: &Env,
+    tile_names: &std::collections::HashSet<String>,
+    errors: &mut Vec<NormalizeError>,
+) -> (Type, Nullable) {
     use Expr::*;
     match expr {
         // Literals
@@ -222,12 +251,19 @@ pub fn infer_expr(expr: &Expr, env: &Env, errors: &mut Vec<NormalizeError>) -> (
         }
         PermLiteral(elems) => (Type::Perm(elems.len() as u32), Nullable::No),
 
-        // Variable access — always nullable
+        // Variable access — resolves per §5.4: params/state first, then tile names.
         Var(vref) => {
             let name = &vref.0.node;
             match env.get(name.as_str()) {
-                Some((ty, _)) => (ty.clone(), Nullable::Yes),
-                Option::None => (Type::Float, Nullable::Yes), // unknown — acyclicity pass will catch
+                Some((ty, n)) => (ty.clone(), *n),
+                Option::None => {
+                    // §5.4 step 3: bare tile name → tile_ref (non-nullable)
+                    if tile_names.contains(name.as_str()) {
+                        (Type::TileRef, Nullable::No)
+                    } else {
+                        (Type::Float, Nullable::Yes) // unknown — acyclicity pass will catch
+                    }
+                }
             }
         }
 
@@ -240,10 +276,10 @@ pub fn infer_expr(expr: &Expr, env: &Env, errors: &mut Vec<NormalizeError>) -> (
         ChildCanonicalOrientation => (Type::Float, Nullable::No),
 
         // Arithmetic — Float in, Float out; propagate nullability
-        Neg(e)  => { let (_, n) = infer_expr(&e.node, env, errors); (Type::Float, n) }
+        Neg(e)  => { let (_, n) = infer_expr(&e.node, env, tile_names, errors); (Type::Float, n) }
         Add(a,b)|Sub(a,b)|Mul(a,b)|Div(a,b) => {
-            let (ta, na) = infer_expr(&a.node, env, errors);
-            let (tb, nb) = infer_expr(&b.node, env, errors);
+            let (ta, na) = infer_expr(&a.node, env, tile_names, errors);
+            let (tb, nb) = infer_expr(&b.node, env, tile_names, errors);
             expect_float_or_group(a.span, &ta, errors);
             expect_float_or_group(b.span, &tb, errors);
             (ta, na.or(nb))
@@ -251,7 +287,7 @@ pub fn infer_expr(expr: &Expr, env: &Env, errors: &mut Vec<NormalizeError>) -> (
 
         // Math functions — Float → Float
         Sin(e)|Cos(e)|Exp(e)|Sqrt(e)|Abs(e)|Log(e) => {
-            let (ty, n) = infer_expr(&e.node, env, errors);
+            let (ty, n) = infer_expr(&e.node, env, tile_names, errors);
             if ty != Type::Float { errors.push(NormalizeError::TypeMismatch {
                 expected: "float".into(), found: ty.to_string(), span: e.span });
             }
@@ -259,61 +295,61 @@ pub fn infer_expr(expr: &Expr, env: &Env, errors: &mut Vec<NormalizeError>) -> (
         }
 
         Lerp(a, b, t) => {
-            let (_, na) = infer_expr(&a.node, env, errors);
-            let (_, nb) = infer_expr(&b.node, env, errors);
-            let (_, nt) = infer_expr(&t.node, env, errors);
+            let (_, na) = infer_expr(&a.node, env, tile_names, errors);
+            let (_, nb) = infer_expr(&b.node, env, tile_names, errors);
+            let (_, nt) = infer_expr(&t.node, env, tile_names, errors);
             (Type::Float, na.or(nb).or(nt))
         }
         Clamp(x, lo, hi) => {
-            let (_, nx) = infer_expr(&x.node, env, errors);
-            let (_, nl) = infer_expr(&lo.node, env, errors);
-            let (_, nh) = infer_expr(&hi.node, env, errors);
+            let (_, nx) = infer_expr(&x.node, env, tile_names, errors);
+            let (_, nl) = infer_expr(&lo.node, env, tile_names, errors);
+            let (_, nh) = infer_expr(&hi.node, env, tile_names, errors);
             (Type::Float, nx.or(nl).or(nh))
         }
 
         // Null coalescing: `x ? default`
         NullCoalesce(x, default) => {
-            let (tx, _) = infer_expr(&x.node, env, errors);
-            let (_, nd) = infer_expr(&default.node, env, errors);
+            let (tx, _) = infer_expr(&x.node, env, tile_names, errors);
+            let (_, nd) = infer_expr(&default.node, env, tile_names, errors);
             (tx, nd)
         }
 
         // Comparisons → Bool
         Lt(a,b)|Gt(a,b)|Le(a,b)|Ge(a,b) => {
-            let (_, na) = infer_expr(&a.node, env, errors);
-            let (_, nb) = infer_expr(&b.node, env, errors);
+            let (_, na) = infer_expr(&a.node, env, tile_names, errors);
+            let (_, nb) = infer_expr(&b.node, env, tile_names, errors);
             (Type::Bool, na.or(nb))
         }
         Eq(a,b)|Ne(a,b) => {
-            let (_, na) = infer_expr(&a.node, env, errors);
-            let (_, nb) = infer_expr(&b.node, env, errors);
+            let (_, na) = infer_expr(&a.node, env, tile_names, errors);
+            let (_, nb) = infer_expr(&b.node, env, tile_names, errors);
             (Type::Bool, na.or(nb))
         }
 
         // Logic → Bool
         And(a,b)|Or(a,b) => {
-            let (_, na) = infer_expr(&a.node, env, errors);
-            let (_, nb) = infer_expr(&b.node, env, errors);
+            let (_, na) = infer_expr(&a.node, env, tile_names, errors);
+            let (_, nb) = infer_expr(&b.node, env, tile_names, errors);
             (Type::Bool, na.or(nb))
         }
-        Not(e) => { let (_, n) = infer_expr(&e.node, env, errors); (Type::Bool, n) }
+        Not(e) => { let (_, n) = infer_expr(&e.node, env, tile_names, errors); (Type::Bool, n) }
 
         // Conditional — branches must agree on type
         If { condition, then_expr, else_expr } => {
-            let (_, nc) = infer_expr(&condition.node, env, errors);
-            let (tt, nt) = infer_expr(&then_expr.node, env, errors);
-            let (_, ne) = infer_expr(&else_expr.node, env, errors);
+            let (_, nc) = infer_expr(&condition.node, env, tile_names, errors);
+            let (tt, nt) = infer_expr(&then_expr.node, env, tile_names, errors);
+            let (_, ne) = infer_expr(&else_expr.node, env, tile_names, errors);
             (tt, nc.or(nt).or(ne))
         }
 
         // Group / perm operations
         Compose(a, b) => {
-            let (ta, na) = infer_expr(&a.node, env, errors);
-            let (_, nb) = infer_expr(&b.node, env, errors);
+            let (ta, na) = infer_expr(&a.node, env, tile_names, errors);
+            let (_, nb) = infer_expr(&b.node, env, tile_names, errors);
             (ta, na.or(nb))
         }
         Inverse(e) => {
-            let (ty, n) = infer_expr(&e.node, env, errors);
+            let (ty, n) = infer_expr(&e.node, env, tile_names, errors);
             (ty, n)
         }
 
@@ -321,7 +357,7 @@ pub fn infer_expr(expr: &Expr, env: &Env, errors: &mut Vec<NormalizeError>) -> (
         Call { args, .. } => {
             let mut n = Nullable::No;
             for arg in args {
-                let (_, na) = infer_expr(&arg.node, env, errors);
+                let (_, na) = infer_expr(&arg.node, env, tile_names, errors);
                 n = n.or(na);
             }
             (Type::Float, n)
@@ -334,7 +370,7 @@ pub fn infer_expr(expr: &Expr, env: &Env, errors: &mut Vec<NormalizeError>) -> (
 fn expect_float_or_group(span: Span, ty: &Type, errors: &mut Vec<NormalizeError>) {
     match ty {
         Type::Float | Type::GroupElem(_) | Type::Perm(_) => {}
-        Type::Bool => errors.push(NormalizeError::TypeMismatch {
+        Type::Bool | Type::TileRef => errors.push(NormalizeError::TypeMismatch {
             expected: "float or group_elem".into(),
             found: ty.to_string(),
             span,

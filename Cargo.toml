@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "frac_lang"]
+members = [".", "frac_lang", "frac_lang/frac_lang_lsp"]
 
 [package]
 name = "Fractals"

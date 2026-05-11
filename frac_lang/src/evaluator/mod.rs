@@ -31,6 +31,9 @@ pub struct EvalConfig {
     pub max_depth: u32,
     /// Seed for the per-tile deterministic RNG.
     pub rng_seed: u64,
+    /// Stop expanding when the tile's world-space scale falls below this value.
+    /// `None` means no size cutoff (depth-only stopping).
+    pub min_size: Option<f64>,
 }
 
 /// A runtime value in the evaluator.

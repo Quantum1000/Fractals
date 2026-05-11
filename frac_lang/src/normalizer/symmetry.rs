@@ -1,11 +1,16 @@
 use std::collections::HashMap;
-use std::f64::consts::PI;
 
-use crate::ast::{File, Item, SymmetryGroup, Span};
+use crate::ast::{File, Item, SymmetryGroup};
 use super::{NormalizeError, geom};
 
 /// Run the symmetry pass.  Returns a map from tile name → inferred/validated
 /// SymmetryGroup.  Pushes errors for inconsistent declarations.
+///
+/// Symmetry is inferred under affine transformations: a permutation π of the
+/// vertices is a symmetry iff there exists an affine map sending vertex i to
+/// vertex π(i) for every i.  Under this definition every non-degenerate
+/// triangle has D3, every non-degenerate parallelogram has at least C2, every
+/// rhombus/rectangle/square has D4 (they are all affinely equivalent), etc.
 pub fn infer_symmetries(
     file: &File,
     errors: &mut Vec<NormalizeError>,
@@ -53,170 +58,74 @@ pub fn infer_symmetries(
 fn symmetry_compatible(inferred: &SymmetryGroup, declared: &SymmetryGroup) -> bool {
     use SymmetryGroup::*;
     match (inferred, declared) {
-        // Trivial is a subgroup of everything
         (_, Trivial) => true,
-        // Declared Cn: inferred must be Cn or Dn with the same or larger n that is a multiple
         (Cyclic(inf_n), Cyclic(dec_n)) => inf_n % dec_n == 0,
         (Dihedral(inf_n), Cyclic(dec_n)) => inf_n % dec_n == 0,
-        // Declared Dn: inferred must be Dn with the same or larger n that is a multiple
         (Dihedral(inf_n), Dihedral(dec_n)) => inf_n % dec_n == 0,
-        // Everything else is incompatible
         _ => false,
     }
 }
 
-/// Infer the maximal symmetry group of a polygon.
-///
-/// Algorithm:
-/// 1. Center the polygon.
-/// 2. For k = sides down to 1, check Dk and Ck.
-/// 3. Return the largest group found.
-///
-/// For practical tile shapes (triangles, quads, hexagons …) this is O(n²).
+/// Infer the maximal affine symmetry group of a polygon.
 pub fn infer_symmetry(pts: &[geom::Point2]) -> SymmetryGroup {
     let n = pts.len();
-    if n == 0 { return SymmetryGroup::Trivial; }
+    if n < 3 { return SymmetryGroup::Trivial; }
 
-    let centered = geom::center_polygon(pts);
-
-    // Try Dn then Cn in descending order of k (k=1 is trivial, skip it).
-    for k in (2..=n).rev() {
-        if n % k != 0 { continue; }
-        if has_dihedral(&centered, k as u32) {
-            return SymmetryGroup::Dihedral(k as u32);
+    // Count rotational symmetries (cyclic shifts of vertex indices).
+    let mut cyclic_order: u32 = 0;
+    for s in 0..n {
+        let perm: Vec<usize> = (0..n).map(|i| (i + s) % n).collect();
+        if is_affine_symmetry(pts, &perm) {
+            cyclic_order += 1;
         }
     }
-    for k in (2..=n).rev() {
-        if n % k != 0 { continue; }
-        if has_cyclic(&centered, k as u32) {
-            return SymmetryGroup::Cyclic(k as u32);
+
+    // Check whether any reflection (reversal of vertex order with an offset)
+    // is also an affine symmetry.  If so, the full group is Dihedral.
+    let mut has_refl = false;
+    for j in 0..n {
+        let perm = reversal_perm(j, n);
+        if is_affine_symmetry(pts, &perm) {
+            has_refl = true;
+            break;
         }
     }
-    SymmetryGroup::Trivial
-}
 
-/// True if the polygon has cyclic symmetry of order k (rotation by 2π/k maps it to itself).
-fn has_cyclic(centered: &[geom::Point2], k: u32) -> bool {
-    let theta = 2.0 * PI / k as f64;
-    let rotated: Vec<geom::Point2> = centered.iter()
-        .map(|&p| geom::rotate(p, theta))
-        .collect();
-    polygon_equal(centered, &rotated)
-}
-
-/// True if the polygon has dihedral symmetry of order k (rotation + reflection).
-fn has_dihedral(centered: &[geom::Point2], k: u32) -> bool {
-    if !has_cyclic(centered, k) { return false; }
-    // One reflection suffices (along the axis through vertex 0 and the centroid).
-    // Reflection reverses winding, so compare the reflected polygon in REVERSE
-    // vertex order against the original CCW polygon.
-    let axis = geom::angle(centered[0]);
-    let reflected: Vec<geom::Point2> = centered.iter()
-        .map(|&p| geom::reflect(p, axis))
-        .collect();
-    let reflected_rev: Vec<geom::Point2> = reflected.into_iter().rev().collect();
-    polygon_equal(centered, &reflected_rev)
-}
-
-/// True if two polygons are equal up to a cyclic rotation of vertex indices.
-fn polygon_equal(a: &[geom::Point2], b: &[geom::Point2]) -> bool {
-    let n = a.len();
-    if n != b.len() { return false; }
-    const TOL: f64 = 1e-6;
-    'rot: for offset in 0..n {
-        for i in 0..n {
-            if geom::dist(a[i], b[(i+offset)%n]) > TOL { continue 'rot; }
-        }
-        return true;
-    }
-    false
-}
-
-/// All element names for a symmetry group (used by the group_perm pass).
-pub fn group_element_names(g: &SymmetryGroup) -> Vec<String> {
-    match g {
-        SymmetryGroup::Trivial => vec!["identity".to_string()],
-        SymmetryGroup::Cyclic(n) => {
-            let mut v = vec!["identity".to_string()];
-            for i in 1..*n {
-                v.push(format!("r{}", i * 360 / n));
-            }
-            v
-        }
-        SymmetryGroup::Dihedral(n) => {
-            let mut v = vec!["identity".to_string()];
-            for i in 1..*n {
-                v.push(format!("r{}", i * 360 / n));
-            }
-            // Reflections: fh, fv, fd, fad for n=4; fv0, fv1, ... for others
-            match n {
-                1 => v.push("f".to_string()),
-                2 => { v.push("fh".to_string()); v.push("fv".to_string()); }
-                4 => {
-                    v.push("fh".to_string());
-                    v.push("fv".to_string());
-                    v.push("fd".to_string());
-                    v.push("fad".to_string());
-                }
-                _ => {
-                    for i in 0..*n {
-                        v.push(format!("fv{}", i));
-                    }
-                }
-            }
-            v
-        }
+    match (cyclic_order, has_refl) {
+        (0, _) | (1, false) => SymmetryGroup::Trivial,
+        (1, true) => SymmetryGroup::Dihedral(1),
+        (k, false) => SymmetryGroup::Cyclic(k),
+        (k, true) => SymmetryGroup::Dihedral(k),
     }
 }
 
-/// Apply group element `elem_name` (from group `g`) as a rotation/reflection to
-/// a centered polygon, returning the permuted vertex sequence.
-pub fn apply_group_element(
-    centered: &[geom::Point2],
-    g: &SymmetryGroup,
-    elem_name: &str,
-) -> Option<Vec<geom::Point2>> {
-    let n = centered.len();
-    let pi = PI;
-
-    let transformed: Vec<geom::Point2> = if elem_name == "identity" {
-        centered.to_vec()
-    } else if let Some(deg_str) = elem_name.strip_prefix('r') {
-        let deg: f64 = deg_str.parse().ok()?;
-        centered.iter().map(|&p| geom::rotate(p, deg * pi / 180.0)).collect()
-    } else {
-        // Reflection
-        let axis = reflection_axis(g, elem_name, centered)?;
-        centered.iter().map(|&p| geom::reflect(p, axis)).collect()
-    };
-
-    Some(transformed)
+/// True iff some affine map sends pts[i] → pts[perm[i]] for every i.
+pub(super) fn is_affine_symmetry(pts: &[geom::Point2], perm: &[usize]) -> bool {
+    let n = pts.len();
+    if n == 0 || perm.len() != n { return n == perm.len(); }
+    if n < 3 {
+        return (0..n).all(|i| geom::dist(pts[i], pts[perm[i]]) < 1e-6);
+    }
+    let src = [pts[0], pts[1], pts[2]];
+    let dst = [pts[perm[0]], pts[perm[1]], pts[perm[2]]];
+    let Some(t) = geom::fit_affine_3(src, dst) else { return false; };
+    for i in 3..n {
+        let mapped = geom::apply_transform(&t, pts[i]);
+        if geom::dist(mapped, pts[perm[i]]) > 1e-6 { return false; }
+    }
+    true
 }
 
-fn reflection_axis(
-    g: &SymmetryGroup,
-    name: &str,
-    centered: &[geom::Point2],
-) -> Option<f64> {
-    match name {
-        "fh"  => Some(0.0),          // x-axis
-        "fv"  => Some(PI / 2.0),     // y-axis
-        "fd"  => Some(PI / 4.0),     // diagonal y=x
-        "fad" => Some(-PI / 4.0),    // anti-diagonal y=-x
-        "f"   => Some(geom::angle(centered.first().copied().unwrap_or([1.0, 0.0]))),
-        other => {
-            // "fvN" — axis through vertex N and origin
-            if let Some(idx_str) = other.strip_prefix("fv") {
-                let idx: usize = idx_str.parse().ok()?;
-                if let SymmetryGroup::Dihedral(n) = g {
-                    // Axis at angle k * π/n for the k-th reflection
-                    let angle = idx as f64 * PI / *n as f64;
-                    return Some(angle);
-                }
-            }
-            None
-        }
-    }
+/// Cyclic shift permutation: i ↦ (i + s) mod n.
+pub(super) fn cyclic_shift_perm(shift: usize, n: usize) -> Vec<usize> {
+    (0..n).map(|i| (i + shift) % n).collect()
+}
+
+/// Reversal permutation parameterised by axis offset j: i ↦ (j − i) mod n.
+pub(super) fn reversal_perm(j: usize, n: usize) -> Vec<usize> {
+    (0..n)
+        .map(|i| ((j as isize - i as isize).rem_euclid(n as isize)) as usize)
+        .collect()
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -238,6 +147,14 @@ mod tests {
         vec![[0.0,0.0],[1.0,0.0],[0.0,1.0]]
     }
 
+    fn generic_parallelogram() -> Vec<geom::Point2> {
+        vec![[0.0,0.0],[1.0,0.0],[1.3,1.0],[0.3,1.0]]
+    }
+
+    fn generic_quad() -> Vec<geom::Point2> {
+        vec![[0.0,0.0],[1.0,0.0],[1.2,1.1],[0.1,0.9]]
+    }
+
     #[test]
     fn test_square_is_d4() {
         assert_eq!(infer_symmetry(&square()), SymmetryGroup::Dihedral(4));
@@ -249,20 +166,34 @@ mod tests {
     }
 
     #[test]
-    fn test_right_triangle_is_trivial() {
-        assert_eq!(infer_symmetry(&right_triangle()), SymmetryGroup::Trivial);
+    fn test_right_triangle_is_d3_under_affine() {
+        // All triangles are affinely equivalent to the equilateral, so they
+        // all have D3 affine symmetry.
+        assert_eq!(infer_symmetry(&right_triangle()), SymmetryGroup::Dihedral(3));
+    }
+
+    #[test]
+    fn test_parallelogram_is_d4_under_affine() {
+        // Every non-degenerate parallelogram is affinely equivalent to the
+        // unit square, so under affine maps it has the same symmetry group: D4.
+        assert_eq!(infer_symmetry(&generic_parallelogram()), SymmetryGroup::Dihedral(4));
+    }
+
+    #[test]
+    fn test_isoceles_trapezoid_is_d1() {
+        // Isoceles trapezoid: a single reflection axis, no rotational symmetry.
+        let poly = vec![[0.0,0.0],[1.0,0.0],[0.7,1.0],[0.3,1.0]];
+        assert_eq!(infer_symmetry(&poly), SymmetryGroup::Dihedral(1));
+    }
+
+    #[test]
+    fn test_generic_quad_is_trivial() {
+        assert_eq!(infer_symmetry(&generic_quad()), SymmetryGroup::Trivial);
     }
 
     #[test]
     fn test_compatible_subgroup() {
         assert!(symmetry_compatible(&SymmetryGroup::Dihedral(4), &SymmetryGroup::Cyclic(2)));
         assert!(!symmetry_compatible(&SymmetryGroup::Trivial, &SymmetryGroup::Dihedral(4)));
-    }
-
-    #[test]
-    fn test_group_element_names_d4() {
-        let names = group_element_names(&SymmetryGroup::Dihedral(4));
-        assert!(names.contains(&"r90".to_string()));
-        assert!(names.contains(&"fh".to_string()));
     }
 }

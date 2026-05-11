@@ -21,7 +21,7 @@ pub use geom::Point2;
 pub struct NormalizedTile {
     /// Inferred or declared symmetry group.
     pub symmetry: SymmetryGroup,
-    /// Side-length ratio invariants for the canonical polygon.
+    /// Canonical affine-invariant tuple (§3.3); length = max(0, 2n − 6).
     pub invariants: Vec<f64>,
     /// Group-element ↔ vertex-permutation map (step 7).
     pub group_perm: Vec<GroupPermEntry>,
@@ -44,8 +44,6 @@ pub struct NormalizedPartition {
 pub struct ChildInfo {
     /// Name of the tile type this child matches.
     pub tile_type: String,
-    /// Side-length ratio invariants of the child polygon.
-    pub invariants: Vec<f64>,
     /// Polygon vertices in CCW order, in the parent tile's coordinate space.
     pub polygon: Vec<Point2>,
     /// Affine transform [a,b,c,d,e,f] mapping the child tile's canonical polygon
@@ -94,6 +92,10 @@ pub enum NormalizeError {
         child_count: usize,
         span: Span,
     },
+    DuplicateFunction { name: String, span: Span },
+    DuplicateVertex { partition: (String, String), name: String, span: Span },
+    DuplicateState { name: String, span: Span },
+    DuplicateParameter { func: String, name: String, span: Span },
     TypeMismatch { expected: String, found: String, span: Span },
     NullableColor { component: &'static str, span: Span },
     RecursiveFunction { cycle: Vec<String> },
@@ -126,6 +128,12 @@ impl std::fmt::Display for NormalizeError {
                 write!(f, "partition '{}.{}' child {child_index}: no tile type matches this polygon", partition.0, partition.1),
             Self::ChildNameOutOfRange { partition, declared_index, child_count, .. } =>
                 write!(f, "partition '{}.{}': child index {declared_index} out of range (partition has {child_count} children)", partition.0, partition.1),
+            Self::DuplicateFunction { name, .. } => write!(f, "duplicate function '{name}'"),
+            Self::DuplicateVertex { partition, name, .. } =>
+                write!(f, "partition '{}.{}': duplicate vertex name '{name}'", partition.0, partition.1),
+            Self::DuplicateState { name, .. } => write!(f, "duplicate state variable '{name}'"),
+            Self::DuplicateParameter { func, name, .. } =>
+                write!(f, "function '{func}': duplicate parameter '{name}'"),
             Self::TypeMismatch { expected, found, .. } =>
                 write!(f, "type mismatch: expected {expected}, found {found}"),
             Self::NullableColor { component, .. } =>
@@ -166,24 +174,29 @@ pub fn normalize(file: File) -> Result<NormalizedFile, Vec<NormalizeError>> {
     // Step 2: infer / validate symmetries.
     let tile_symmetries = symmetry::infer_symmetries(&file, &mut errors);
 
-    // Build per-tile canonical polygons and invariants (used by topology).
-    let mut tile_canonicals: HashMap<String, Vec<Point2>> = HashMap::new();
-    let mut tile_invariants: HashMap<String, Vec<f64>> = HashMap::new();
-    for item in &file.items {
-        if let Item::Tile(t) = &item.node {
-            let pts: Vec<Point2> = t.canonical.iter()
-                .map(|p| [p.node.x, p.node.y])
-                .collect();
-            let invs = geom::side_length_ratios(&pts);
-            tile_canonicals.insert(t.name.0.node.clone(), pts);
-            tile_invariants.insert(t.name.0.node.clone(), invs);
-        }
-    }
+    // Build a deterministic list of (tile name, canonical polygon) in source
+    // declaration order.  Used by topology for affine matching — the first
+    // declared tile whose canonical can be affine-mapped onto a face wins.
+    let tile_canonicals: Vec<(String, Vec<Point2>)> = file.items.iter()
+        .filter_map(|item| match &item.node {
+            Item::Tile(t) => {
+                let pts: Vec<Point2> = t.canonical.iter()
+                    .map(|p| [p.node.x, p.node.y])
+                    .collect();
+                Some((t.name.0.node.clone(), pts))
+            }
+            _ => None,
+        })
+        .collect();
+
+    // Step 3: compute affine invariants for every tile (§3.3).
+    let tile_invariants: std::collections::HashMap<String, Vec<f64>> = tile_canonicals.iter()
+        .map(|(name, pts)| (name.clone(), geom::compute_affine_invariants(pts)))
+        .collect();
 
     // Step 3: compute partition topology.
     let partitions = topology::compute_partitions(
         &file,
-        &tile_invariants,
         &tile_canonicals,
         &mut errors,
     );
@@ -207,12 +220,12 @@ pub fn normalize(file: File) -> Result<NormalizedFile, Vec<NormalizeError>> {
     // Assemble NormalizedFile.
     let mut tiles = HashMap::new();
     for (name, sym) in tile_symmetries {
-        let invs = tile_invariants.get(&name).cloned().unwrap_or_default();
-        let gp   = tile_gp.get(&name).map(|v| v.iter().map(|e| GroupPermEntry {
+        let gp = tile_gp.get(&name).map(|v| v.iter().map(|e| GroupPermEntry {
             name: e.name.clone(),
             perm: e.perm.clone(),
         }).collect()).unwrap_or_default();
-        tiles.insert(name, NormalizedTile { symmetry: sym, invariants: invs, group_perm: gp });
+        let invariants = tile_invariants.get(&name).cloned().unwrap_or_default();
+        tiles.insert(name, NormalizedTile { symmetry: sym, invariants, group_perm: gp });
     }
 
     Ok(NormalizedFile {
@@ -228,15 +241,16 @@ pub fn normalize(file: File) -> Result<NormalizedFile, Vec<NormalizeError>> {
 fn check_duplicates(file: &File, errors: &mut Vec<NormalizeError>) {
     let mut seen_tiles: HashMap<String, Span> = HashMap::new();
     let mut seen_parts: HashMap<(String, String), Span> = HashMap::new();
+    let mut seen_fns: HashMap<String, Span> = HashMap::new();
+    let mut seen_patterns: u32 = 0;
 
     for item in &file.items {
         match &item.node {
             Item::Tile(t) => {
                 let name = t.name.0.node.clone();
                 let span = t.name.0.span;
-                if let Some(prev) = seen_tiles.insert(name.clone(), span) {
+                if seen_tiles.insert(name.clone(), span).is_some() {
                     errors.push(NormalizeError::DuplicateTile { name, span });
-                    let _ = prev;
                 }
             }
             Item::Partition(p) => {
@@ -249,8 +263,80 @@ fn check_duplicates(file: &File, errors: &mut Vec<NormalizeError>) {
                         span,
                     });
                 }
+                // §5.2: duplicate edge/interior/child names within a partition
+                check_partition_duplicates(p, errors);
             }
-            _ => {}
+            Item::Function(f) => {
+                let name = f.name.0.node.clone();
+                let span = f.name.0.span;
+                if seen_fns.insert(name.clone(), span).is_some() {
+                    errors.push(NormalizeError::DuplicateFunction { name, span });
+                }
+                // §5.2: duplicate parameter names within a function
+                let mut seen_params: HashMap<String, Span> = HashMap::new();
+                for param in &f.params {
+                    let pname = param.0.node.clone();
+                    let pspan = param.0.span;
+                    if seen_params.insert(pname.clone(), pspan).is_some() {
+                        errors.push(NormalizeError::DuplicateParameter {
+                            func: f.name.0.node.clone(),
+                            name: pname,
+                            span: pspan,
+                        });
+                    }
+                }
+            }
+            Item::Pattern(pat) => {
+                seen_patterns += 1;
+                if seen_patterns > 1 {
+                    // DuplicatePattern is not a separate error variant yet; use a parse error
+                    // approach — leave for a future addition.
+                }
+                // §5.2: duplicate state variable names
+                let mut seen_vars: HashMap<String, Span> = HashMap::new();
+                for sv in &pat.state.node.vars {
+                    let vname = sv.node.name.0.node.clone();
+                    let vspan = sv.node.name.0.span;
+                    if seen_vars.insert(vname.clone(), vspan).is_some() {
+                        errors.push(NormalizeError::DuplicateState { name: vname, span: vspan });
+                    }
+                }
+            }
+            Item::Error(_) => {}
+        }
+    }
+}
+
+fn check_partition_duplicates(part: &crate::ast::PartitionDecl, errors: &mut Vec<NormalizeError>) {
+    let key = (part.tile.0.node.clone(), part.name.0.node.clone());
+    let mut seen: HashMap<String, Span> = HashMap::new();
+
+    // Edge and interior vertex names share a namespace.
+    for pv in &part.vertices {
+        let vname = pv.node.name.0.node.clone();
+        let vspan = pv.node.name.0.span;
+        if seen.insert(vname.clone(), vspan).is_some() {
+            errors.push(NormalizeError::DuplicateVertex {
+                partition: key.clone(),
+                name: vname,
+                span: vspan,
+            });
+        }
+    }
+
+    // Child name bindings also live in the partition scope.
+    let mut seen_child_names: HashMap<String, Span> = HashMap::new();
+    for cn in &part.child_names {
+        if let Some(ref nm) = cn.node.name {
+            let cname = nm.0.node.clone();
+            let cspan = nm.0.span;
+            if seen_child_names.insert(cname.clone(), cspan).is_some() {
+                errors.push(NormalizeError::DuplicateVertex {
+                    partition: key.clone(),
+                    name: cname,
+                    span: cspan,
+                });
+            }
         }
     }
 }
