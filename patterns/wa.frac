@@ -1,0 +1,120 @@
+tile quad {
+    sides 4
+    canonical (0,0) (1,0) (1,1) (0,1)
+}
+
+tile tri {
+    sides 3
+    canonical (0,0) (1,0) (1,1)
+}
+
+partition quad.quad_split {
+    edge m_s = (0.5, 0)
+    edge m_e = (1, 0.5)
+    edge m_n = (0.5, 1)
+    edge m_w = (0, 0.5)
+
+    cut m_s -- m_e
+    cut m_e -- m_n
+    cut m_n -- m_w
+    cut m_w -- m_s
+}
+
+partition tri.tri_split {
+    edge m_s  = (0.5, 0)
+    edge m_e  = (1, 0.5)
+    edge mid  = (0.5, 0.5)
+
+    cut mid -- m_s
+    cut mid -- m_e
+}
+
+pattern {
+    root quad
+
+    state {
+        r      = 0.0
+        g      = 0.0
+        b      = 0.0
+        w      = 1.0
+        target = 1.0
+        factor = 1.0
+        decay  = 0.6
+    }
+
+    color (r ? 0, g ? 0, b ? 1, 1)
+
+    rule quad {
+        -> quad.quad_split {
+            # child 0: inner rotated quad [m_s, m_e, m_n, m_w]
+            child 0 {
+                r      = lerp(target, r, 0)
+                g      = lerp(target, g, 0)
+                b      = lerp(target, b, 0)
+                target = lerp(0.1, target, factor * decay)
+                factor = factor * decay
+            }
+            # child 1: bottom-left tri [m_w, v0, m_s]
+            child 1 {
+                r      = lerp(target, r, 0.24742047)
+                g      = lerp(target, g, 0.24742047)
+                b      = lerp(target, b, 0.24742047)
+                target = lerp(1.0, target, factor * decay)
+                factor = factor * decay
+            }
+            # child 2: bottom-right tri [m_s, v1, m_e]
+            child 2 {
+                r      = lerp(target, r, 0.0)
+                g      = lerp(target, g, 0.0)
+                b      = lerp(target, b, 0.1)
+                target = lerp(1.0, target, factor * decay)
+                factor = factor * decay
+            }
+            # child 3: top-right tri [m_e, v2, m_n]
+            child 3 {
+                r      = lerp(target, r, 0.1)
+                g      = lerp(target, g, 0.1)
+                b      = lerp(target, b, 0.0)
+                target = lerp(0.5, target, factor * decay)
+                factor = factor * decay
+            }
+            # child 4: top-left tri [m_n, v3, m_w]
+            child 4 {
+                r      = lerp(target, r, 0.2)
+                g      = lerp(target, g, 0.2)
+                b      = lerp(target, b, 0.0)
+                target = lerp(0.0, target, factor * decay)
+                factor = factor * decay
+            }
+        }
+    }
+
+    rule tri {
+        -> tri.tri_split {
+            # child 0: quad [m_s, v1, m_e, mid]
+            child 0 {
+                r      = lerp(target, r, 0)
+                g      = lerp(target, g, 0)
+                b      = lerp(target, b, 0)
+                target = lerp(0.1, target, factor * decay)
+                factor = factor * decay
+            }
+            # child 1: tri [v0, m_s, mid]
+            child 1 {
+                r      = lerp(target, r, 0.5)
+                g      = lerp(target, g, 0.5)
+                b      = lerp(target, b, 0.6)
+                target = lerp(1.0, target, factor * decay)
+                factor = factor * decay
+            }
+            # child 2: tri [mid, m_e, v2]
+            child 2 {
+                r      = lerp(target, r, 0.3)
+                g      = lerp(target, g, 0.2)
+                b      = lerp(target, b, 0.0)
+                target = lerp(1.0, target, factor * decay)
+                factor = factor * decay
+            }
+        }
+    }
+}
