@@ -154,6 +154,9 @@ pub fn fit_affine_3(src: [Point2; 3], dst: [Point2; 3]) -> Option<[f64; 6]> {
 /// and optional reflection) to `actual` polygon.  Both must have the same number of
 /// vertices.  Returns the transform and the rotation offset (which canonical vertex
 /// maps to `actual[0]`).
+///
+/// Among all valid alignments, prefers the one with the smallest rotation angle
+/// (closest to identity), breaking ties by preferring non-reflected over reflected.
 pub fn fit_affine_to_polygon(
     canonical: &[Point2],
     actual: &[Point2],
@@ -161,21 +164,36 @@ pub fn fit_affine_to_polygon(
     let n = canonical.len();
     if n != actual.len() || n < 3 { return None; }
 
-    // Try every cyclic alignment (which canonical vertex aligns with actual[0])
+    let mut best: Option<([f64; 6], usize, bool, f64)> = None; // (transform, offset, reflected, |angle|)
+
+    let mut try_candidate = |t: [f64; 6], offset: usize, reflected: bool| {
+        let angle = t[3].atan2(t[0]).abs();
+        let is_better = match best {
+            None => true,
+            Some((_, _, prev_refl, prev_angle)) => {
+                (!reflected && prev_refl)
+                    || (reflected == prev_refl && angle < prev_angle - 1e-9)
+            }
+        };
+        if is_better {
+            best = Some((t, offset, reflected, angle));
+        }
+    };
+
     for offset in 0..n {
+        let dst = [actual[0], actual[1], actual[2]];
+
         // Direct orientation
         let src = [
             canonical[offset % n],
             canonical[(offset+1) % n],
             canonical[(offset+2) % n],
         ];
-        let dst = [actual[0], actual[1], actual[2]];
         if let Some(t) = fit_affine_3(src, dst) {
-            // Verify all other vertices
             if canonical.iter().enumerate().all(|(i, &p)| {
                 dist(apply_transform(&t, p), actual[(n + i - offset) % n]) < 1e-6
             }) {
-                return Some((t, offset));
+                try_candidate(t, offset, false);
             }
         }
 
@@ -190,13 +208,13 @@ pub fn fit_affine_to_polygon(
             if can_rev.iter().enumerate().all(|(i, &p)| {
                 dist(apply_transform(&t, p), actual[(n + i - offset) % n]) < 1e-6
             }) {
-                // offset into original canonical: vertex (n-1-offset) maps to actual[0]
                 let orig_offset = (n - offset) % n;
-                return Some((t, orig_offset));
+                try_candidate(t, orig_offset, true);
             }
         }
     }
-    None
+
+    best.map(|(t, offset, _, _)| (t, offset))
 }
 
 // ── Affine invariants (§3.3) ──────────────────────────────────────────────────
