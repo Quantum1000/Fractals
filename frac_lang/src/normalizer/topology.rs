@@ -275,7 +275,7 @@ fn find_boundary_edge(pos: Point2, poly: &[Point2]) -> Option<usize> {
 /// Build boundary edges, inserting named edge vertices as subdivision points.
 fn build_boundary_edges(
     parent_poly: &[Point2],
-    named_verts_slice: &[Point2],
+    _named_verts_slice: &[Point2],
     name_to_idx: &HashMap<String, usize>,
     part: &PartitionDecl,
     edges: &mut Vec<(usize, usize)>,

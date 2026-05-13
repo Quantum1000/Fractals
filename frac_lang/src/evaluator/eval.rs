@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use crate::ast::*;
 use super::{Value, RenderTile, EvalConfig};
 use super::expr::{self, EvalContext};
-use crate::normalizer::{NormalizedFile, NormalizedPartition, ChildInfo};
+use crate::normalizer::{NormalizedFile, NormalizedPartition};
 use crate::normalizer::geom::{self, Point2};
 
 /// Expand a single tile instance and collect all leaf `RenderTile`s into `out`.
@@ -19,7 +19,7 @@ pub fn expand(
     out: &mut Vec<RenderTile>,
 ) {
     // Compute the world-space polygon for this tile instance.
-    let tile_data = match nf.tiles.get(tile_type) {
+    let _tile_data = match nf.tiles.get(tile_type) {
         Some(t) => t,
         None => return,
     };
@@ -111,7 +111,7 @@ pub fn expand(
     let slot_perm = resolve_slot_order(sub, part, &updated_ctx, nf);
 
     // Expand each child.
-    for (slot_idx, child) in part.children.iter().enumerate() {
+    for (slot_idx, _child) in part.children.iter().enumerate() {
         // Apply slot permutation: slot_perm[slot_idx] is the canonical child index
         // that goes into this slot.
         let canonical_child_idx = if slot_idx < slot_perm.len() {
@@ -130,7 +130,7 @@ pub fn expand(
 
         // Add child context variables.
         let child_orientation_val = Some(Value::Float(0.0)); // placeholder
-        let mut child_ctx_state = child_state.clone();
+        let child_ctx_state = child_state.clone();
 
         // Find injection for this child (by name or index).
         let injection = sub.child_injections.iter().find(|inj| {
@@ -226,7 +226,7 @@ fn resolve_slot_order(
                 Value::Perm(p) => {
                     if p.len() == n { perm = p; }
                 }
-                Value::GroupElem { ref group, ref element } => {
+                Value::GroupElem { group: _, ref element } => {
                     // Resolve group element to a permutation via the tile's group_perm map.
                     if let Some(tile_data) = nf.tiles.values().find(|_| true) {
                         for entry in &tile_data.group_perm {

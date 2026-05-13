@@ -1,0 +1,72 @@
+tile quad {
+    sides 4
+    canonical (0, 0) (1, 0) (1, 1) (0, 1)
+}
+
+partition quad.quad_split {
+    edge m_s = (0.5, 0.0)
+    edge m_e = (1.0, 0.5)
+    edge m_n = (0.5, 1.0)
+    edge m_w = (0.0, 0.5)
+    interior center = (0.5, 0.5)
+
+    cut center -- m_s
+    cut center -- m_e
+    cut center -- m_n
+    cut center -- m_w
+
+    child 0 = tl
+    child 1 = bl
+    child 2 = tr
+    child 3 = br
+}
+
+pattern {
+    root quad
+
+    state {
+        r      = 0.0
+        g      = 0.0
+        b      = 0.0
+        target = 1.0
+        factor = 1.0
+        decay  = 0.5
+    }
+
+    color (r, g, b, 1.0)
+
+    rule quad -> quad.quad_split {
+        child tl {
+            r = lerp(r, 0.0, target)
+            g = lerp(g, 0.0, target)
+            b = lerp(b, 0.0, target)
+            target = factor * decay
+            factor = factor * decay
+            alignment = d4.r180
+        }
+        child tr {
+            r = lerp(r, 1.0, target)
+            g = lerp(g, 1.0, target)
+            b = lerp(b, 1.0, target)
+            target = factor * decay
+            factor = factor * decay
+            alignment = d4.fv3
+        }
+        child bl {
+            r = lerp(r, 1.0, target)
+            g = lerp(g, 1.0, target)
+            b = lerp(b, 1.0, target)
+            target = factor * decay
+            factor = factor * decay
+            alignment = d4.fv1
+        }
+        child br {
+            r = lerp(r, 0.0, target * 0.0)
+            g = lerp(g, 0.0, target * 0.0)
+            b = lerp(b, 0.0, target * 0.0)
+            target = factor * decay
+            factor = factor * decay
+            alignment = d4.identity
+        }
+    }
+}

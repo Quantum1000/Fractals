@@ -150,7 +150,7 @@ fn check_rule_body(
 fn check_substitution(
     sub: &Substitution,
     env: &Env,
-    partitions: &HashMap<(String, String), NormalizedPartition>,
+    _partitions: &HashMap<(String, String), NormalizedPartition>,
     tile_names: &std::collections::HashSet<String>,
     errors: &mut Vec<NormalizeError>,
 ) {

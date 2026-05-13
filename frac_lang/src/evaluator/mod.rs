@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use crate::ast::{Expr, Item, Spanned};
-use crate::normalizer::{NormalizedFile, geom::Point2, geom};
+use crate::normalizer::{NormalizedFile, geom::Point2};
 
 pub mod expr;
 mod eval;

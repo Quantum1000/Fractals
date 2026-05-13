@@ -42,7 +42,7 @@ pub fn canonicalize(file: File) -> File {
     });
 
     // Functions: sort child_names within each partition (by index).
-    let mut partitions = partitions.into_iter().map(|mut item| {
+    let partitions = partitions.into_iter().map(|mut item| {
         if let Item::Partition(ref mut p) = item.node {
             p.child_names.sort_by_key(|cn| cn.node.index.node);
         }
