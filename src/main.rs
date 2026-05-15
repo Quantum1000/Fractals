@@ -440,6 +440,7 @@ impl FractalApp {
         if let Some(path) = rfd::FileDialog::new()
             .add_filter("JSON", &["json"])
             .set_title("Save Pattern")
+            .set_directory("patterns")
             .save_file() {
                 match serde_json::to_string_pretty(&self.pattern) {
                     Ok(json) => {
@@ -457,6 +458,7 @@ impl FractalApp {
         if let Some(path) = rfd::FileDialog::new()
             .add_filter("JSON", &["json"])
             .set_title("Load Pattern")
+            .set_directory("patterns")
             .pick_file() {
                 match load_pattern_from_file(path.to_str().unwrap_or_default()) {
                     Ok(pattern) => {
@@ -552,6 +554,7 @@ impl FractalApp {
         if let Some(path) = rfd::FileDialog::new()
             .add_filter("PNG", &["png"])
             .set_title("Export Preview")
+            .set_directory("generations")
             .save_file() {
                 // Generate the fractal data
                 let fractal = generate_fractal(self.iterations, &self.pattern, self.decay);
@@ -635,6 +638,7 @@ impl FractalApp {
         if let Some(path) = rfd::FileDialog::new()
             .add_filter("Frac", &["frac"])
             .set_title("Load .frac File")
+            .set_directory("patterns")
             .pick_file()
         {
             match fs::read_to_string(&path) {
@@ -673,6 +677,7 @@ impl FractalApp {
         if let Some(path) = rfd::FileDialog::new()
             .add_filter("PNG", &["png"])
             .set_title("Export Frac PNG")
+            .set_directory("generations")
             .save_file()
         {
             let nf = match &self.frac_normalized {
