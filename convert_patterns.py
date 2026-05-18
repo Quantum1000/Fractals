@@ -26,25 +26,27 @@ KNOWN_PERMS = {
     ((1,0),(1,1),(0,0),(0,1)): 'flip_v',
 }
 
-# d4 element names emitted by the normalizer for a canonical (0,0)(1,0)(1,1)(0,1) quad.
-# (Verified against frac_lang::normalizer::group_perm.)
-PERM_TO_D4 = {
-    'identity':   'identity',
-    'rotate_90':  'r90',
-    'rotate_180': 'r180',
-    'rotate_270': 'r270',
-    'flip_h':     'fv1',  # mirror across x = 0.5
-    'flip_v':     'fv3',  # mirror across y = 0.5
+# Each grid perm, expressed as a slot_order perm: slot_order[slot] = canonical
+# child index that lands in that slot. Canonical child ordering (centroid sort,
+# x then y) is: 0=TL, 1=BL, 2=TR, 3=BR. Derived from the grid's pixel.perm
+# mapping (which gives target-(y,x) for each source) by inverting through the
+# canonical reindexing.
+PERM_TO_SLOT_ORDER = {
+    'identity':   [0, 1, 2, 3],
+    'rotate_90':  [1, 3, 0, 2],
+    'rotate_180': [3, 2, 1, 0],
+    'rotate_270': [2, 0, 3, 1],
+    'flip_h':     [2, 3, 0, 1],
+    'flip_v':     [1, 0, 3, 2],
 }
 
 # Old grid coordinate (y, x) -> partition child name.
-# The partition declares: child 0=tl, child 1=bl, child 2=tr, child 3=br
-# (centroid-sort order, x then y, matching the normalizer's child indexing).
+# Names chosen to not collide with state vars (e.g. avoid bare `bl`).
 GRID_TO_NAME = {
-    (0, 0): 'tl',
-    (0, 1): 'tr',
-    (1, 0): 'bl',
-    (1, 1): 'br',
+    (0, 0): 'top_left',
+    (0, 1): 'top_right',
+    (1, 0): 'bottom_left',
+    (1, 1): 'bottom_right',
 }
 
 
@@ -79,34 +81,51 @@ partition quad.quad_split {
     cut center -- m_n
     cut center -- m_w
 
-    child 0 = tl
-    child 1 = bl
-    child 2 = tr
-    child 3 = br
+    child 0 = top_left
+    child 1 = bottom_left
+    child 2 = top_right
+    child 3 = bottom_right
 }
 
 """
 
 
 def render_child(name, color, perm_name):
+    """Port of src/main.rs::old_generate_fractal (the preview renderer):
+
+        blend_factor = 1 - (1 - blend) * parent.a
+        new.rgb      = lerp(parent.rgb, pixel.rgb, blend_factor)
+        new.a        = lerp(1, pixel.a, blend_factor)
+                     = 1 - (1 - pixel.a) * blend_factor
+
+    Perm propagates via a state perm `p`, used at tile level as `slot_order`.
+    Per-child update: `p = compose(p, <canonical pixel's slot_order perm>)`.
+    Frac's `compose(pa, pb)[i] = pa[pb[i]]`, which gives the same direction
+    as grid's `parent.perm.compose(base_pixel.perm)` once both perms are in
+    slot-to-canonical (i.e. target-to-source) form.
+    """
     r, g, b, a = color['r'], color['g'], color['b'], color['a']
-    d4 = PERM_TO_D4[perm_name]
-    # target * a is the lerp amount: pixel's alpha scales how much it overrides
-    # the parent.  When a == 1, this is just `target` (matching wa.frac).
+    perm = PERM_TO_SLOT_ORDER[perm_name]
+    a_lit = fmt_f(a)
+
     if a == 1.0:
-        mix = "target"
+        a_update = "a = 1.0"             # 1 - (1-1)*bf = 1
+    elif a == 0.0:
+        a_update = "a = 1.0 - bf"        # 1 - (1-0)*bf = 1 - bf
     else:
-        mix = f"target * {fmt_f(a)}"
+        a_update = f"a = 1.0 - (1.0 - {a_lit}) * bf"
+
     lines = [
         f"        child {name} {{",
-        f"            r = lerp(r, {fmt_f(r)}, {mix})",
-        f"            g = lerp(g, {fmt_f(g)}, {mix})",
-        f"            b = lerp(b, {fmt_f(b)}, {mix})",
-        f"            target = factor * decay",
-        f"            factor = factor * decay",
-        f"            alignment = d4.{d4}",
-        f"        }}",
+        f"            r = lerp(r, {fmt_f(r)}, bf)",
+        f"            g = lerp(g, {fmt_f(g)}, bf)",
+        f"            b = lerp(b, {fmt_f(b)}, bf)",
+        f"            {a_update}",
     ]
+    if perm != [0, 1, 2, 3]:
+        perm_lit = ", ".join(str(i) for i in perm)
+        lines.append(f"            p = compose(p, perm [{perm_lit}])")
+    lines.append("        }")
     return "\n".join(lines)
 
 
@@ -127,17 +146,22 @@ def convert_pattern(old_pattern):
     root quad
 
     state {{
-        r      = 0.0
-        g      = 0.0
-        b      = 0.0
-        target = 1.0
-        factor = 1.0
-        decay  = 0.5
+        r     = 0.0
+        g     = 0.0
+        b     = 0.0
+        a     = 0.0
+        blend = 1.0
+        bf    = 0.0
+        d     = 0.5
+        p     = perm [0, 1, 2, 3]
     }}
 
     color (r, g, b, 1.0)
 
     rule quad -> quad.quad_split {{
+        bf = 1.0 - (1.0 - blend) * a
+        blend = blend * d
+        slot_order = p
 {children_block}
     }}
 }}

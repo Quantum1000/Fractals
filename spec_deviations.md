@@ -47,6 +47,18 @@ override to child tile-type selection.
 are not yet implemented. The evaluator does not yet apply slot
 permutations.
 
+### Canonical Rewrite on Save
+
+The spec and [frac_lang_doc.md](frac_lang_doc.md) state that the
+normalizer sorts declarations canonically "on save". This is not wired
+up: the LSP
+([frac_lang/frac_lang_lsp/src/main.rs](frac_lang/frac_lang_lsp/src/main.rs))
+advertises only `text_document_sync` and `hover_provider` — no
+`documentFormattingProvider`, no `will_save`/`did_save` handler. The
+`printer` module exists
+([frac_lang/src/printer.rs](frac_lang/src/printer.rs)) but is not
+invoked by the editor, so source files are never rewritten.
+
 ### §5.2 DuplicatePattern Error
 
 More than one `pattern` block in a file is not yet reported as an error.

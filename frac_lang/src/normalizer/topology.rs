@@ -10,7 +10,7 @@
 ///   6. Assigns child indices and names.
 
 use std::collections::HashMap;
-use crate::ast::{File, Item, PartitionDecl, VertexKind};
+use crate::ast::{File, Item, PartitionDecl, Span, VertexKind};
 use super::{NormalizeError, ChildInfo, NormalizedPartition, geom};
 use super::geom::Point2;
 
@@ -88,10 +88,27 @@ fn compute_one_partition(
     // Build vertex name → index map.
     let mut name_to_idx: HashMap<String, usize> = HashMap::new();
 
+    // Canonical boundary vertices are referenced as v0, v1, ….
+    for i in 0..boundary_count {
+        name_to_idx.insert(format!("v{i}"), i);
+    }
+
     // Named partition vertices
     for pv in &part.vertices {
         let pos: Point2 = [pv.node.pos.node.x, pv.node.pos.node.y];
         let vname = pv.node.name.0.node.clone();
+
+        if name_to_idx.contains_key(&vname) {
+            errors.push(NormalizeError::InvalidPartitionVertex {
+                partition: key.clone(),
+                name: vname.clone(),
+                reason: format!(
+                    "name '{vname}' shadows a canonical vertex of the parent tile"
+                ),
+                span: pv.node.name.0.span,
+            });
+            return None;
+        }
 
         if pv.node.kind == VertexKind::Edge {
             // Find which boundary edge this vertex lies on and insert it there.
@@ -166,35 +183,64 @@ fn compute_one_partition(
         })
         .collect();
 
+    let header_span = Span {
+        start: part.tile.0.span.start,
+        end: part.name.0.span.end,
+    };
+
     if inner_faces.is_empty() {
-        errors.push(NormalizeError::NoTileMatch {
+        errors.push(NormalizeError::PartitionIncomplete {
             partition: key.clone(),
-            child_index: 0,
+            reason: "no inner faces were produced — the declared cuts do not enclose any region".into(),
+            span: header_span,
         });
         return None;
     }
 
-    // Debug assertion: child areas sum to parent area.
-    #[cfg(debug_assertions)]
+    // Child areas must sum to parent area. If they don't, the declared cuts
+    // failed to partition the tile (e.g. a cut doesn't reach the boundary),
+    // so we surface a NoTileMatch rather than panicking — the LSP relies on
+    // this code path for partially-written source.
     {
         let parent_area = geom::area(parent_poly);
         let child_sum: f64 = inner_faces.iter()
             .map(|f| geom::area(&f.iter().map(|&i| verts[i]).collect::<Vec<_>>()))
             .sum();
-        debug_assert!(
-            (child_sum - parent_area).abs() < parent_area * 1e-6,
-            "child areas {child_sum} do not sum to parent area {parent_area}"
-        );
+        if (child_sum - parent_area).abs() >= parent_area * 1e-6 {
+            errors.push(NormalizeError::PartitionIncomplete {
+                partition: key.clone(),
+                reason: format!(
+                    "child face areas sum to {child_sum:.6} but parent area is {parent_area:.6} \
+                     — a cut may not reach the boundary, or two declared vertices may coincide"
+                ),
+                span: header_span,
+            });
+            return None;
+        }
     }
 
     // ── Step 5: match each face to a tile type ────────────────────────────────
-    // Build child name lookup from author-assigned names.
+    // Build child name lookup from author-assigned names, and a tile-override
+    // lookup for `child N [= name] : tile` annotations (§4.6).
     let mut index_to_name: HashMap<u32, String> = HashMap::new();
+    let mut index_to_override: HashMap<u32, crate::ast::Spanned<String>> = HashMap::new();
     for cn in &part.child_names {
         if let Some(ref nm) = cn.node.name {
             index_to_name.insert(cn.node.index.node, nm.0.node.clone());
         }
+        if let Some(ref tr) = cn.node.tile_override {
+            index_to_override.insert(cn.node.index.node, tr.0.clone());
+        }
     }
+
+    // Collapse runs of colinear vertices on each face: a vertex shared with
+    // another face (e.g. the foot of a cut) appears in this face's boundary
+    // even when it lies on a straight edge here. Matching tile types by
+    // vertex arity requires the simplified polygon.
+    let inner_faces: Vec<Vec<usize>> = inner_faces
+        .into_iter()
+        .map(|f| dedup_colinear(&f, &verts))
+        .collect();
 
     // Sort faces for stable canonical ordering: by centroid (x first, then y).
     let mut sorted_faces: Vec<Vec<usize>> = inner_faces;
@@ -221,17 +267,42 @@ fn compute_one_partition(
     for (i, face_indices) in sorted_faces.iter().enumerate() {
         let polygon: Vec<Point2> = face_indices.iter().map(|&j| verts[j]).collect();
 
-        // Find the first declared tile (in source order) whose canonical polygon
-        // can be affine-mapped onto this face.  Under affine matching, any
-        // n-gon matches any other n-gon of the same affine class.
+        // If the author explicitly annotated this child with `: tile`, use that
+        // specific tile and only fail if its canonical cannot be affine-mapped
+        // onto the face.  Otherwise, fall back to first-declared-match order.
+        // Affine matching alone cannot distinguish quads from quads (e.g. a
+        // square from a golden rectangle), so the override is the only way to
+        // disambiguate same-arity tiles.
         let mut matched: Option<(String, [f64; 6], usize)> = None;
-        for (tname, canonical) in tile_canonicals {
-            if canonical.len() != polygon.len() { continue; }
-            if let Some((transform, anchor)) =
-                geom::fit_affine_to_polygon(canonical, &polygon)
-            {
-                matched = Some((tname.clone(), transform, anchor));
-                break;
+        if let Some(spanned) = index_to_override.get(&(i as u32)) {
+            let tname = &spanned.node;
+            match tile_canonicals.iter().find(|(n, _)| n == tname) {
+                None => {
+                    errors.push(NormalizeError::UnknownTile {
+                        name: tname.clone(),
+                        span: spanned.span,
+                    });
+                    return None;
+                }
+                Some((_, canonical)) => {
+                    if canonical.len() == polygon.len() {
+                        if let Some((transform, anchor)) =
+                            geom::fit_affine_to_polygon(canonical, &polygon)
+                        {
+                            matched = Some((tname.clone(), transform, anchor));
+                        }
+                    }
+                }
+            }
+        } else {
+            for (tname, canonical) in tile_canonicals {
+                if canonical.len() != polygon.len() { continue; }
+                if let Some((transform, anchor)) =
+                    geom::fit_affine_to_polygon(canonical, &polygon)
+                {
+                    matched = Some((tname.clone(), transform, anchor));
+                    break;
+                }
             }
         }
 
@@ -240,6 +311,8 @@ fn compute_one_partition(
                 errors.push(NormalizeError::NoTileMatch {
                     partition: key.clone(),
                     child_index: i,
+                    polygon: polygon.clone(),
+                    span: header_span,
                 });
                 return None;
             }
@@ -368,6 +441,24 @@ fn subdivide_intersections(
     }
 
     (verts, result_edges)
+}
+
+// ── Colinear vertex removal ───────────────────────────────────────────────────
+
+/// Drop any vertex that lies on the straight segment between its two neighbors.
+fn dedup_colinear(face: &[usize], verts: &[Point2]) -> Vec<usize> {
+    let n = face.len();
+    if n < 3 { return face.to_vec(); }
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        let a = verts[face[(i + n - 1) % n]];
+        let b = verts[face[i]];
+        let c = verts[face[(i + 1) % n]];
+        if geom::cross(geom::sub(b, a), geom::sub(c, b)).abs() > EPS {
+            out.push(face[i]);
+        }
+    }
+    if out.len() < 3 { face.to_vec() } else { out }
 }
 
 // ── Half-edge face enumeration (DCEL) ─────────────────────────────────────────

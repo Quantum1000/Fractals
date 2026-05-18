@@ -44,7 +44,8 @@ fn split_normalize_error(e: &NormalizeError) -> Vec<(Span, String)> {
         UnknownTile { span, .. } => *span,
         UnknownPartition { span, .. } => *span,
         InconsistentSymmetry { span, .. } => *span,
-        NoTileMatch { .. } => Span { start: 0, end: 0 },
+        NoTileMatch { span, .. } => *span,
+        PartitionIncomplete { span, .. } => *span,
         ChildNameOutOfRange { span, .. } => *span,
         TypeMismatch { span, .. } => *span,
         NullableColor { span, .. } => *span,
@@ -58,6 +59,7 @@ fn split_normalize_error(e: &NormalizeError) -> Vec<(Span, String)> {
         DuplicateVertex { span, .. } => *span,
         DuplicateState { span, .. } => *span,
         DuplicateParameter { span, .. } => *span,
+        TileWithoutPartition { span, .. } => *span,
     };
     vec![(span, msg)]
 }

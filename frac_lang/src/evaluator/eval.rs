@@ -267,7 +267,7 @@ fn decompose_transform(t: &[f64; 6], polygon: &[Point2]) -> ([f64; 2], f64, f64,
     let col1_len = (t[1]*t[1] + t[4]*t[4]).sqrt();
     let scale = (col0_len * col1_len).sqrt();
     let orientation = t[3].atan2(t[0]).to_degrees();
-    let shear = 0.0;   // simplified
+    let shear = geom::shear_of(t);
     let stretch = if col0_len > 1e-15 { col1_len / col0_len } else { 1.0 };
     (pos, scale, orientation, shear, stretch)
 }

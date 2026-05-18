@@ -101,6 +101,17 @@ pub fn apply_transform(t: &[f64; 6], p: Point2) -> Point2 {
      t[3]*p[0] + t[4]*p[1] + t[5]]
 }
 
+/// Shear of an affine transform: the cosine of the angle between the two
+/// linear-part column vectors. Zero means orthogonal columns (pure
+/// rotation+scale, no shear); magnitude approaches 1 as the basis collapses.
+/// Sign indicates direction of skew.
+pub fn shear_of(t: &[f64; 6]) -> f64 {
+    let col0_len_sq = t[0]*t[0] + t[3]*t[3];
+    let col1_len_sq = t[1]*t[1] + t[4]*t[4];
+    let denom = (col0_len_sq * col1_len_sq).sqrt();
+    if denom < 1e-15 { 0.0 } else { (t[0]*t[1] + t[3]*t[4]) / denom }
+}
+
 /// Compose two affine transforms: apply `inner` then `outer`.
 pub fn compose_transforms(outer: &[f64; 6], inner: &[f64; 6]) -> [f64; 6] {
     [
@@ -155,8 +166,9 @@ pub fn fit_affine_3(src: [Point2; 3], dst: [Point2; 3]) -> Option<[f64; 6]> {
 /// vertices.  Returns the transform and the rotation offset (which canonical vertex
 /// maps to `actual[0]`).
 ///
-/// Among all valid alignments, prefers the one with the smallest rotation angle
-/// (closest to identity), breaking ties by preferring non-reflected over reflected.
+/// Among all valid alignments, selects the **canonical orientation** per
+/// spec §8.6: lexicographic minimum of (|shear|, |log stretch|, |rotation|),
+/// with a final tiebreak preferring non-reflected over reflected.
 pub fn fit_affine_to_polygon(
     canonical: &[Point2],
     actual: &[Point2],
@@ -164,19 +176,32 @@ pub fn fit_affine_to_polygon(
     let n = canonical.len();
     if n != actual.len() || n < 3 { return None; }
 
-    let mut best: Option<([f64; 6], usize, bool, f64)> = None; // (transform, offset, reflected, |angle|)
+    // (transform, offset, reflected, |shear|, |log stretch|, |angle|)
+    let mut best: Option<([f64; 6], usize, bool, f64, f64, f64)> = None;
 
     let mut try_candidate = |t: [f64; 6], offset: usize, reflected: bool| {
+        let shear = shear_of(&t).abs();
+        let col0_len = (t[0]*t[0] + t[3]*t[3]).sqrt();
+        let col1_len = (t[1]*t[1] + t[4]*t[4]).sqrt();
+        let stretch = if col0_len > 1e-15 && col1_len > 1e-15 {
+            (col1_len / col0_len).ln().abs()
+        } else { f64::INFINITY };
         let angle = t[3].atan2(t[0]).abs();
+        let tol = 1e-9;
         let is_better = match best {
             None => true,
-            Some((_, _, prev_refl, prev_angle)) => {
-                (!reflected && prev_refl)
-                    || (reflected == prev_refl && angle < prev_angle - 1e-9)
+            Some((_, _, prev_refl, prev_shear, prev_stretch, prev_angle)) => {
+                if shear < prev_shear - tol { true }
+                else if shear > prev_shear + tol { false }
+                else if stretch < prev_stretch - tol { true }
+                else if stretch > prev_stretch + tol { false }
+                else if angle < prev_angle - tol { true }
+                else if angle > prev_angle + tol { false }
+                else { !reflected && prev_refl }
             }
         };
         if is_better {
-            best = Some((t, offset, reflected, angle));
+            best = Some((t, offset, reflected, shear, stretch, angle));
         }
     };
 
@@ -214,7 +239,7 @@ pub fn fit_affine_to_polygon(
         }
     }
 
-    best.map(|(t, offset, _, _)| (t, offset))
+    best.map(|(t, offset, _, _, _, _)| (t, offset))
 }
 
 // ── Affine invariants (§3.3) ──────────────────────────────────────────────────

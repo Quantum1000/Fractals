@@ -1,0 +1,182 @@
+tile square{
+    sides 4
+    canonical (0,0) (1,0) (1,1) (0,1)
+}
+
+tile gold_rect {
+    sides 4
+    canonical (0,0) (1.61803398875,0) (1.61803398875,1) (0,1)
+}
+
+tile cut_tri {
+    sides 3
+    canonical (0,0) (1,0) (0,1)
+}
+
+tile corner_tri {
+    sides 3
+    canonical (0,0) (1,0) (0,1)
+}
+
+partition gold_rect.gold_split {
+    edge top = (1,0)
+    edge bot = (1,1)
+
+    cut top -- bot
+    child 0 = sq : square
+    child 1 = rc : gold_rect
+}
+
+partition square.corner_cut {
+    cut v1 -- v3
+
+    child 0 = corner : cut_tri
+    child 1 = inner : corner_tri
+}
+
+partition cut_tri.cut_more {
+    edge m_s = (0.5, 0.0)
+    edge m_w = (0.0, 0.5)
+    interior half = (0.25, 0.25)
+
+    cut m_s -- half
+    cut m_w -- half
+    cut half -- v1
+    cut half -- v2
+
+    child 0 = left_cut : cut_tri
+    child 1 = corner : corner_tri
+    child 2 = inner : corner_tri
+    child 3 = right_cut : cut_tri
+}
+
+partition corner_tri.sierpinski {
+    edge m_s = (0.5, 0.0)
+    edge m_w = (0.0, 0.5)
+    edge m_ne = (0.5, 0.5)
+
+    cut m_s -- m_w
+    cut m_w -- m_ne
+    cut m_ne -- m_s
+
+    child 0 = tl : corner_tri
+    child 1 = bl : corner_tri
+    child 2 = c : corner_tri
+    child 3 = tr : corner_tri
+}
+
+pattern {
+    root gold_rect
+
+    state {
+        r     = 0.0
+        g     = 0.0
+        b     = 0.0
+        a     = 0.0
+        blend = 1.0
+        bf    = 0.0
+        d     = 0.7
+        p     = perm [0, 1, 2, 3]
+    }
+
+    color (r, g, b, 1)
+
+    rule gold_rect {
+        -> gold_rect.gold_split {
+            bf = 1.0 - (1.0 - blend) * a
+            blend = blend * d
+            child sq {
+                r = lerp(r, 0.0, bf)
+                g = lerp(g, 0.0, bf)
+                b = lerp(b, 0.0, bf)
+                a = 1.0 - bf
+            }
+            child rc {
+                r = lerp(r, 0.0, bf)
+                g = lerp(g, 0.0, bf)
+                b = lerp(b, 1.0, bf)
+                a = 1.0
+                alignment = d4.r90
+            }
+        }
+    }
+
+    rule square {
+        -> square.corner_cut {
+            bf = 1.0 - (1.0 - blend) * a
+            blend = blend * d
+            child corner {
+                r = lerp(r, 0.0, bf)
+                g = lerp(g, 0.0, bf)
+                b = lerp(b, 0.0, bf)
+                a = 1.0 - bf
+            }
+            child inner {
+                r = lerp(r, 0.0, bf)
+                g = lerp(g, 0.0, bf)
+                b = lerp(b, 1.0, bf)
+                a = 1.0
+            }
+        }
+    }
+
+    rule cut_tri {
+        -> cut_tri.cut_more {
+            bf = 1.0 - (1.0 - blend) * a
+            blend = blend * d
+            child corner {
+                r = lerp(r, 0.5, bf)
+                g = lerp(g, 0.4, bf)
+                b = lerp(b, 0.0, bf)
+                a = 1.0
+            }
+            child inner {
+                r = lerp(r, 0.0, bf)
+                g = lerp(g, 0.0, bf)
+                b = lerp(b, 1.0, bf)
+                a = 1.0
+            }
+            child left_cut{
+                r = lerp(r, 0.0, bf)
+                g = lerp(g, 0.0, bf)
+                b = lerp(b, 0.0, bf)
+                a = 1
+            }
+            child right_cut{
+                r = lerp(r, 0.0, bf)
+                g = lerp(g, 0.0, bf)
+                b = lerp(b, 1.0, bf)
+                a = 1.0
+            }
+        }
+    }
+
+    rule corner_tri -> corner_tri.sierpinski {
+        bf = 1.0 - (1.0 - blend) * a
+        blend = blend * d
+        child tl {
+            r = lerp(r, 1.0, bf)
+            g = lerp(g, 0.8, bf)
+            b = lerp(b, 0.0, bf)
+            a = 1.0
+        }
+        child c {
+            r = lerp(r, 0.0, bf)
+            g = lerp(g, 0.0, bf)
+            b = lerp(b, 0.0, bf)
+            a = 1.0
+        }
+        child bl {
+            r = lerp(r, 0.0, bf)
+            g = lerp(g, 0.0, bf)
+            b = lerp(b, 1.0, bf)
+            a = 1.0
+        }
+        child tr {
+            r = lerp(r, 0.0, bf)
+            g = lerp(g, 0.0, bf)
+            b = lerp(b, 1.0, bf)
+            a = 1.0
+        }
+    }
+}

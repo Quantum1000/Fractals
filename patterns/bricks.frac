@@ -15,58 +15,58 @@ partition quad.quad_split {
     cut center -- m_n
     cut center -- m_w
 
-    child 0 = tl
-    child 1 = bl
-    child 2 = tr
-    child 3 = br
+    child 0 = top_left
+    child 1 = bottom_left
+    child 2 = top_right
+    child 3 = bottom_right
 }
 
 pattern {
     root quad
 
     state {
-        r      = 0.0
-        g      = 0.0
-        b      = 0.0
-        target = 1.0
-        factor = 1.0
-        decay  = 0.5
+        r     = 0.0
+        g     = 0.0
+        b     = 0.0
+        a     = 0.0
+        blend = 1.0
+        bf    = 0.0
+        d     = 0.5
+        p     = perm [0, 1, 2, 3]
     }
 
     color (r, g, b, 1.0)
 
     rule quad -> quad.quad_split {
-        child tl {
-            r = lerp(r, 0.0, target * 0.23636363)
-            g = lerp(g, 0.0, target * 0.23636363)
-            b = lerp(b, 0.0, target * 0.23636363)
-            target = factor * decay
-            factor = factor * decay
-            alignment = d4.identity
+        bf = 1.0 - (1.0 - blend) * a
+        blend = blend * d
+        slot_order = p
+        child top_left {
+            r = lerp(r, 0.0, bf)
+            g = lerp(g, 0.0, bf)
+            b = lerp(b, 0.0, bf)
+            a = 1.0 - (1.0 - 0.23636363) * bf
         }
-        child tr {
-            r = lerp(r, 0.0, target * 0.76363635)
-            g = lerp(g, 0.0, target * 0.76363635)
-            b = lerp(b, 0.0, target * 0.76363635)
-            target = factor * decay
-            factor = factor * decay
-            alignment = d4.fv1
+        child top_right {
+            r = lerp(r, 0.0, bf)
+            g = lerp(g, 0.0, bf)
+            b = lerp(b, 0.0, bf)
+            a = 1.0 - (1.0 - 0.76363635) * bf
+            p = compose(p, perm [2, 3, 0, 1])
         }
-        child bl {
-            r = lerp(r, 0.7766618, target)
-            g = lerp(g, 0.42222175, target)
-            b = lerp(b, 0.067781374, target)
-            target = factor * decay
-            factor = factor * decay
-            alignment = d4.r270
+        child bottom_left {
+            r = lerp(r, 0.7766618, bf)
+            g = lerp(g, 0.42222175, bf)
+            b = lerp(b, 0.067781374, bf)
+            a = 1.0
+            p = compose(p, perm [2, 0, 3, 1])
         }
-        child br {
-            r = lerp(r, 0.11112862, target)
-            g = lerp(g, 0.41153228, target)
-            b = lerp(b, 0.727628, target)
-            target = factor * decay
-            factor = factor * decay
-            alignment = d4.r90
+        child bottom_right {
+            r = lerp(r, 0.11112862, bf)
+            g = lerp(g, 0.41153228, bf)
+            b = lerp(b, 0.727628, bf)
+            a = 1.0
+            p = compose(p, perm [1, 3, 0, 2])
         }
     }
 }

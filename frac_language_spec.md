@@ -60,6 +60,12 @@ tile quad {
   the declaration is a subgroup of the inferred group and emits
   `InconsistentSymmetry` otherwise.
 
+Every declared `tile` must have at least one `partition` whose head names
+that tile. A tile with no partition has no defined substitution behavior
+and is rejected with `TileWithoutPartition`. Termination of recursion
+must be expressed explicitly (e.g. via state-guarded rules in the
+pattern), never implicitly by omitting a partition.
+
 ### 3.2 Symmetry — Affine Semantics
 
 Symmetry is defined under **affine equivalence**. A vertex permutation π
@@ -202,7 +208,15 @@ intersection and re-embeds the resulting planar graph.
 
 ### 4.3 Tile-Type Matching for Faces
 
-Each interior face of the cut graph is assigned a tile type:
+Before matching, **consecutive colinear vertices on a face boundary
+are collapsed**. A vertex introduced by a cut that meets a face along
+a straight edge (the incoming and outgoing edges at that vertex are
+colinear) is not counted toward the face's arity. A corner cut across
+a quad therefore yields a 3-vertex triangle and a 5-vertex pentagon,
+not two quads. The collapse is per-face: the underlying planar graph
+is unchanged, so neighboring faces that need the vertex still see it.
+
+Each interior face of the cut graph is then assigned a tile type:
 
 1. Compute the face polygon's affine invariants (§3.3).
 2. Walk declared tiles in **source declaration order**.
@@ -296,6 +310,8 @@ The normalizer rejects:
   (`DuplicateParameter`).
 - Two state variables with the same name in the pattern's `state` block
   (`DuplicateState`).
+- A `tile` declaration with no corresponding `partition`
+  (`TileWithoutPartition`). See §3.1.
 
 ### 5.3 Cross-Scope Shadowing
 
@@ -516,8 +532,43 @@ mechanisms applied in this order at evaluation:
 1. Resolve tile type for each canonical child (§7.3.4).
 2. Apply `slot_order` permutations to obtain final slot assignments.
 3. For each placed child, resolve `alignment` (defaulting to the
-   slot's canonical orientation) and compose with the slot's affine
-   transform.
+   slot's canonical orientation, §8.6) and compose with the slot's
+   affine transform.
+
+### 8.6 Canonical Orientation
+
+When no explicit `alignment` is given, the child is placed in its
+**canonical orientation** within the slot. A slot polygon may admit
+several distinct affine fits of the child's canonical vertex list
+(one per cyclic rotation of the labelling, times two for reflection);
+the canonical orientation is the one that minimizes affine distortion
+from a similarity transform.
+
+The four-degree-of-freedom linear part of an affine map decomposes
+into rotation, uniform scale, shear, and stretch (non-uniform scale).
+Uniform scale and translation are fixed by the slot's position and
+size and are identical across all candidate fits, so the canonical
+orientation is selected by lexicographically minimizing the remaining
+three components, in order:
+
+1. **Shear** — magnitude of the off-diagonal term after extracting
+   rotation (equivalently, `|cos θ|` where θ is the angle between the
+   linear part's two column vectors).
+2. **Stretch** — deviation of the column-length ratio from 1, i.e.
+   `|log(‖col₁‖ / ‖col₀‖)|`.
+3. **Rotation** — `|θ|` where θ is the angle of the rotation factor
+   in the polar decomposition (smallest rotation away from the
+   identity / "most upright").
+
+A final tiebreak prefers orientation-preserving (non-reflected) fits
+over reflected ones. Comparisons use a small floating-point tolerance
+so that fits which are equal up to numerical noise fall through to
+the next criterion.
+
+For similarity tilings (Penrose, pinwheel, etc.) every candidate fit
+has shear 0 and stretch 1, so this rule reduces to "smallest rotation
+from upright". The shear and stretch criteria affect only genuinely
+affine-distorted tilings.
 
 ---
 

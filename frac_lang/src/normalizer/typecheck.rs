@@ -116,6 +116,12 @@ fn check_pattern(
     // Check rules.
     for rule in &pat.rules {
         let tile_name = rule.node.tile.0.node.clone();
+        if !tile_names.contains(&tile_name) {
+            errors.push(NormalizeError::UnknownTile {
+                name: tile_name.clone(),
+                span: rule.node.tile.0.span,
+            });
+        }
         check_rule_body(&rule.node.body, &env, partitions, tile_names, &tile_name, errors);
     }
 }
@@ -150,10 +156,26 @@ fn check_rule_body(
 fn check_substitution(
     sub: &Substitution,
     env: &Env,
-    _partitions: &HashMap<(String, String), NormalizedPartition>,
+    partitions: &HashMap<(String, String), NormalizedPartition>,
     tile_names: &std::collections::HashSet<String>,
     errors: &mut Vec<NormalizeError>,
 ) {
+    // Validate the substitution targets a real tile and partition.
+    let sub_tile = &sub.tile.0.node;
+    let sub_part = &sub.partition.0.node;
+    if !tile_names.contains(sub_tile) {
+        errors.push(NormalizeError::UnknownTile {
+            name: sub_tile.clone(),
+            span: sub.tile.0.span,
+        });
+    } else if !partitions.contains_key(&(sub_tile.clone(), sub_part.clone())) {
+        errors.push(NormalizeError::UnknownPartition {
+            tile: sub_tile.clone(),
+            name: sub_part.clone(),
+            span: sub.partition.0.span,
+        });
+    }
+
     // Apply tile-level updates sequentially (each update visible to subsequent ones).
     let mut env = env.clone();
 

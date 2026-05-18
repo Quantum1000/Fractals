@@ -77,6 +77,7 @@ pub enum NormalizeError {
     ParseErrors(Vec<ParseError>),
     DuplicateTile { name: String, span: Span },
     DuplicatePartition { tile: String, name: String, span: Span },
+    TileWithoutPartition { name: String, span: Span },
     UnknownTile { name: String, span: Span },
     UnknownPartition { tile: String, name: String, span: Span },
     InconsistentSymmetry {
@@ -85,7 +86,11 @@ pub enum NormalizeError {
         inferred: SymmetryGroup,
         span: Span,
     },
-    NoTileMatch { partition: (String, String), child_index: usize },
+    NoTileMatch { partition: (String, String), child_index: usize, polygon: Vec<Point2>, span: Span },
+    /// The declared cuts do not partition the parent tile (child areas don't
+    /// sum to the parent area — e.g. a cut doesn't reach the boundary, or two
+    /// declared vertices coincide).
+    PartitionIncomplete { partition: (String, String), reason: String, span: Span },
     ChildNameOutOfRange {
         partition: (String, String),
         declared_index: u32,
@@ -120,12 +125,29 @@ impl std::fmt::Display for NormalizeError {
             }
             Self::DuplicateTile { name, .. } => write!(f, "duplicate tile '{name}'"),
             Self::DuplicatePartition { tile, name, .. } => write!(f, "duplicate partition '{tile}.{name}'"),
+            Self::TileWithoutPartition { name, .. } => write!(f, "tile '{name}' has no partition (§3.1)"),
             Self::UnknownTile { name, .. } => write!(f, "unknown tile '{name}'"),
             Self::UnknownPartition { tile, name, .. } => write!(f, "unknown partition '{tile}.{name}'"),
             Self::InconsistentSymmetry { tile, declared, inferred, .. } =>
                 write!(f, "tile '{tile}': declared symmetry {declared:?} is inconsistent with inferred {inferred:?}"),
-            Self::NoTileMatch { partition, child_index } =>
-                write!(f, "partition '{}.{}' child {child_index}: no tile type matches this polygon", partition.0, partition.1),
+            Self::PartitionIncomplete { partition, reason, .. } => {
+                write!(f, "partition '{}.{}' is incomplete: {reason}", partition.0, partition.1)
+            }
+            Self::NoTileMatch { partition, child_index, polygon, .. } => {
+                write!(f, "partition '{}.{}' child {child_index}: no tile type matches this polygon (vertices: [", partition.0, partition.1)?;
+                for (i, p) in polygon.iter().enumerate() {
+                    if i > 0 { write!(f, ", ")?; }
+                    write!(f, "({:.4}, {:.4})", p[0], p[1])?;
+                }
+                write!(f, "]")?;
+                let inv = geom::compute_affine_invariants(polygon);
+                write!(f, ", invariants: [")?;
+                for (i, v) in inv.iter().enumerate() {
+                    if i > 0 { write!(f, ", ")?; }
+                    write!(f, "{v:.6}")?;
+                }
+                write!(f, "])")
+            }
             Self::ChildNameOutOfRange { partition, declared_index, child_count, .. } =>
                 write!(f, "partition '{}.{}': child index {declared_index} out of range (partition has {child_count} children)", partition.0, partition.1),
             Self::DuplicateFunction { name, .. } => write!(f, "duplicate function '{name}'"),
@@ -305,6 +327,28 @@ fn check_duplicates(file: &File, errors: &mut Vec<NormalizeError>) {
             Item::Error(_) => {}
         }
     }
+
+    // §3.1 / §5.2: every declared tile must have at least one partition
+    // whose head names that tile. Class-headed partitions
+    // (`tile.class.partition`) do not satisfy this requirement on their
+    // own — they apply by affine class, not by name.
+    let mut tiles_with_partition: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    for item in &file.items {
+        if let Item::Partition(p) = &item.node {
+            if !p.tile_is_class {
+                tiles_with_partition.insert(p.tile.0.node.clone());
+            }
+        }
+    }
+    for (name, span) in &seen_tiles {
+        if !tiles_with_partition.contains(name) {
+            errors.push(NormalizeError::TileWithoutPartition {
+                name: name.clone(),
+                span: *span,
+            });
+        }
+    }
 }
 
 fn check_partition_duplicates(part: &crate::ast::PartitionDecl, errors: &mut Vec<NormalizeError>) {
@@ -355,14 +399,14 @@ mod tests {
     }
 
     #[test]
-    fn test_normalize_tile_only() {
+    fn test_tile_without_partition_error() {
+        // §3.1: a tile with no partition is rejected.
         let src = "tile quad { sides 4 canonical (0,0) (1,0) (1,1) (0,1) symmetry d4 }";
         let (file, _) = parse(src);
         let result = normalize(file);
-        assert!(result.is_ok(), "{:?}", result.err());
-        let nf = result.unwrap();
-        assert!(nf.tiles.contains_key("quad"));
-        assert_eq!(nf.tiles["quad"].symmetry, SymmetryGroup::Dihedral(4));
+        assert!(result.is_err());
+        let errs = result.err().unwrap();
+        assert!(errs.iter().any(|e| matches!(e, NormalizeError::TileWithoutPartition { name, .. } if name == "quad")));
     }
 
     #[test]
