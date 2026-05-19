@@ -96,7 +96,7 @@ pattern {
                 g = lerp(g, 0.0, bf)
                 b = lerp(b, 1.0, bf)
                 a = 1.0
-                alignment = d4.r90
+                alignment = d4.r180
             }
         }
     }
