@@ -441,8 +441,10 @@ The chosen tile must be in the slot's affine class (otherwise
 expression position.
 
 Indexing inside child blocks (`child N` or `child name`) is the
-**canonical pre-permutation** index (§4.5). When `slot_order` rearranges
-slots, the injected state travels with its tile.
+**canonical pre-permutation** index (§4.5) — the slot order defined by
+the partition, before any `slot_order` rearrangement. Injections bind to
+the *tile* at that canonical position, so when `slot_order` moves the
+tile to a different geometric slot, its injected state moves with it.
 
 ---
 
@@ -614,14 +616,18 @@ it.
 - `group_elem(G)` — bound to a specific symmetry group `G`
 - `perm(n)` — a permutation of `n` elements
 - `tile_ref` — a tile-type identifier
+- `list(T)` — ordered, variable-length sequence of values of type `T` (§10.5)
 
-All types are wrapped in `Option<T>` for nullability.
+All types are wrapped in `Option<T>` for nullability. A `list(T)` is
+itself nullable; its elements are `T` and may individually be `none`
+only if `T` is itself a nullable type.
 
 ### 10.2 Literals
 
 `0`, `1.5`, `true`, `false`, `none`, group literals (§9.1), permutation
 literals (§9.2), tile-name literals (any bare tile identifier in
-expression position evaluates to a `tile_ref`).
+expression position evaluates to a `tile_ref`), and list literals
+(§10.5).
 
 ### 10.3 Reads
 
@@ -649,10 +655,81 @@ expression position evaluates to a `tile_ref`).
 - **Clamp**: `clamp(x, lo, hi)`
 - **Group / perm**: `compose(a, b)`, `inverse(a)`
 - **User functions**: by name
+- **List**: see §10.5
 
 `none` propagates through arithmetic and group operations; the
 typechecker computes nullability so the LSP can warn and the color
 check can error.
+
+### 10.5 Lists
+
+Lists are the language's general-purpose compound value: ordered,
+variable-length, homogeneously typed. They exist primarily so that
+functions can return composite results and so authors can build up
+values (e.g. a color from a 3-component computation plus a separately
+chosen alpha) piecewise.
+
+Lists are not intended as a performance-sensitive data structure; the
+expression language is small and evaluation is per-tile. Domain values
+that happen to be list-shaped (color expressions, vertex coordinates,
+function argument lists) remain their own syntactic forms and are
+*not* lists — see §10.5.5.
+
+#### 10.5.1 Literal Syntax
+
+```frac
+[]                          # empty list
+[1, 2, 3]                   # list(float)
+[d3.r120, d3.r240]          # list(group_elem(d3))
+[[1, 0], [0, 1]]            # list(list(float))
+```
+
+Elements are separated by commas. A trailing comma is permitted.
+
+#### 10.5.2 Type
+
+A list literal's type is `list(T)` where `T` is the common type of its
+elements. All elements must share a single type `T`; mixed-type lists
+are rejected with `ListElementTypeMismatch`.
+
+The empty list `[]` has type `list(?)` and unifies with any concrete
+`list(T)` at its use site. If its type cannot be inferred from context
+the normalizer emits `AmbiguousEmptyList`.
+
+#### 10.5.3 Operations
+
+| Form              | Result        | Notes                                          |
+|-------------------|---------------|------------------------------------------------|
+| `x[i]`            | `T`           | Zero-based index into `list(T)`; `i` is `float` and must be a non-negative integer at evaluation. Out-of-range yields `none`. |
+| `len(x)`          | `float`       | Element count.                                  |
+| `concat(a, b)`    | `list(T)`     | Concatenation; both operands must share `T`.   |
+| `append(x, e)`    | `list(T)`     | Returns `x` with `e` appended (`e: T`).        |
+
+Concatenation is the primary composition primitive: a function
+returning a 3-element list can be combined with a separately computed
+alpha via `concat(rgb(...), [a])`.
+
+#### 10.5.4 Nullability
+
+`none` propagates through list operations: indexing a `none` list,
+concatenating with `none`, or taking `len` of `none` yields `none`.
+Indexing a non-null list with an out-of-range index also yields `none`.
+
+#### 10.5.5 Relationship to Other Tuple-Shaped Constructs
+
+The following constructs in the language look list-like but are
+*not* lists and are not interchangeable with them:
+
+- Vertex coordinates `(x, y)` (§4.1).
+- The color expression `(r, g, b, a)` (§7.2).
+- Function argument lists `f(a, b, c)` (§6).
+- Permutation literals `perm [i, j, …]` (§9.2) — the bracket form
+  here is permutation-literal syntax, not a list of floats.
+
+Keeping these nominal preserves domain-specific checking (units,
+ranges, arity) and LSP affordances. Conversions between domain types
+and lists, if needed, are explicit and provided as built-ins (none
+defined yet).
 
 ---
 

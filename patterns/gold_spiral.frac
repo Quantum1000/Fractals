@@ -79,6 +79,10 @@ pattern {
         p     = perm [0, 1, 2, 3]
     }
 
+    # I want the spiral to be gold, fading to white in the center, surrounded by black and dark blue
+    # 0.7, 0.5, 0 to 1, 1, 1 (gold to white)
+    # 
+
     color (r, g, b, 1)
 
     rule gold_rect {
